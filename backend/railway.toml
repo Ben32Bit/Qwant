@@ -1,5 +1,5 @@
 [build]
-builder = "NIXPACKS"
+builder = "RAILPACK"
 
 [deploy]
 startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
@@ -12,4 +12,4 @@ restartPolicyMaxRetries = 3
 # Uncomment once deployed and stable:
 # [[crons]]
 # schedule = "30 21 * * 1-5"
-# command = "cd backend && python -m scripts.refresh_prices"
+# command = "python -m scripts.refresh_prices"
