@@ -14,11 +14,22 @@
   --accent-red: #ff4757;
   --accent-blue: #4a9eff;
   --accent-yellow: #ffd43b;
+  --accent-purple: #a855f7;
   --chart-line-1: #4a9eff;
   --chart-line-2: #8888a0;
   --chart-line-3: #00d4aa;
   --chart-line-4: #ffd43b;
   --border: #2a2a3a;
+  /* screener mode overrides — applied via [data-mode="screener"] on root */
+  --mode-accent: var(--accent-blue);
+}
+
+[data-mode="screener"] {
+  --mode-accent: var(--accent-purple);
+  --bg-primary: #0a080f;
+  --bg-secondary: #110d1a;
+  --bg-card: #1a1228;
+  --border: #2d2040;
 }
 
 * {

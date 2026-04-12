@@ -4,6 +4,33 @@ This file tracks all changes, decisions, and project state. Updated by Claude Co
 
 ---
 
+## 2026-04-13 — AI Stock Screener tab (full feature)
+
+**What:** Added a second AI mode — "AI Stock Screener" — as a new tab alongside "AI Portfolio Builder" and "Manual Build". Screener lets users ask retroactive window-based screening questions ("top return sector ETF each quarter 2022–2025"), see ranked results per window, backtest a rotation strategy, and link directly to Manual Build.
+
+**Files created:**
+- `backend/app/models/screener.py` — Pydantic models: ScreenRequest, ScreenerResult, ScreenerWindow, TickerWindowResult, RotationBacktestRequest
+- `backend/app/services/screener_engine.py` — `run_screener()` (computes rank per window per metric), `run_rotation_backtest()` (no-lookahead rotation: holds previous window's winner each period)
+- `backend/app/services/screener_ai.py` — AI service with SCREENER_SYSTEM_PROMPT (tool_choice=required, single shot to run_screen), concise 4-5 bullet chat reply
+- `backend/app/routers/screen.py` — POST /api/screen/chat, /api/screen/run, /api/screen/backtest
+- `frontend/src/components/Chat/StockScreenerPanel.jsx` — screener chat panel with suggestion chips, purple-accented
+- `frontend/src/components/Dashboard/ScreenerResults.jsx` — timeline card view + full rank table, "Backtest Rotation (Top 1/3)" + "Import to Manual Build" buttons
+
+**Files modified:**
+- `backend/app/main.py` — registers screen router
+- `frontend/src/styles/globals.css` — added --accent-purple, [data-mode="screener"] theme override (dark purple BG + border)
+- `frontend/src/components/Layout/SplitView.jsx` — 3 tabs (Portfolio Builder / Stock Screener / Manual Build); applies data-mode="screener" to root element; splits right panel for screener (screener results left + rotation backtest right); handles rotation backtest fetch + import-to-manual flow
+- `frontend/src/components/Chat/ManualBuilderPanel.jsx` — accepts screenerImport prop; useEffect auto-populates rows/settings; shows purple "Loaded from Screener" banner
+
+**Decisions:**
+- Rotation backtest uses PREVIOUS window's winner (no lookahead bias) — matches Bailey paper principles
+- Color theme: screener = purple (#a855f7); portfolio = blue (#4a9eff); manual = green. Achieved via CSS data-mode attribute on root, overriding --bg-primary/secondary/card/border vars
+- Screener right panel splits when rotation backtest runs: left=screener table, right=standard ResultsPanel with backtest
+- Import to manual: equal-weights the top-N tickers from the LAST window; maps window_freq to rebalance_frequency
+- AI screener uses tool_choice="required" (no research step needed — screener itself is the research)
+
+---
+
 ## 2026-04-13 — Markdown rendering in chat + concise AI chat format
 
 **What:** AI chat messages were rendering raw markdown (## headers, - bullets as plain text). Fixed by adding react-markdown to MessageBubble. Also clarified the system prompt so the chat bubble stays to a brief 3–5 bullet summary while the full analysis goes in display_config.narrative (results panel). Added "Suggested Next Steps" section to narrative template with research-paper-informed suggestions.

@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.routers import chat, backtest, data
+from app.routers import chat, backtest, data, screen
 from app.services.price_store import init_db
 
 logging.basicConfig(
@@ -71,6 +71,7 @@ app.state.backtest_rate = BACKTEST_RATE
 app.include_router(chat.router,     prefix="/api")
 app.include_router(backtest.router, prefix="/api")
 app.include_router(data.router,     prefix="/api")
+app.include_router(screen.router,   prefix="/api")
 
 
 @app.get("/health")

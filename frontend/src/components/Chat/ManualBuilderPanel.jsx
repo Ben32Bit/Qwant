@@ -92,13 +92,30 @@ function WeightBar({ rows }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ManualBuilderPanel({ onResult, loading, setLoading, aiPortfolio, aiBacktest }) {
+export default function ManualBuilderPanel({ onResult, loading, setLoading, aiPortfolio, aiBacktest, screenerImport }) {
   const [rows, setRows] = useState(DEFAULT_ROWS)
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
   const [error, setError] = useState(null)
   const [uploadMsg, setUploadMsg] = useState(null)
-  const [importedFrom, setImportedFrom] = useState(null) // tracks last imported AI portfolio
+  const [importedFrom, setImportedFrom] = useState(null)      // tracks last imported AI portfolio
+  const [importedScreener, setImportedScreener] = useState(null) // tracks last imported screener
   const fileInputRef = useRef(null)
+
+  // ── Auto-import from screener when screenerImport changes ───────────────────
+  useEffect(() => {
+    if (!screenerImport || screenerImport === importedScreener) return
+    const weight = (1 / screenerImport.tickers.length).toFixed(4)
+    setRows(screenerImport.tickers.map(t => ({ ticker: t, weight })))
+    setSettings(prev => ({
+      startDate:  screenerImport.startDate ?? prev.startDate,
+      endDate:    screenerImport.endDate   ?? prev.endDate,
+      rebalance:  screenerImport.rebalance ?? prev.rebalance,
+      benchmark:  prev.benchmark,
+    }))
+    setError(null)
+    setUploadMsg(null)
+    setImportedScreener(screenerImport)
+  }, [screenerImport, importedScreener])
 
   // ── Import from AI portfolio ─────────────────────────────────────────────────
   const loadFromAi = useCallback(() => {
@@ -202,6 +219,23 @@ export default function ManualBuilderPanel({ onResult, loading, setLoading, aiPo
   return (
     <div className="flex flex-col h-full overflow-y-auto">
       <div className="p-4 space-y-4">
+
+        {/* Screener import banner */}
+        {screenerImport && screenerImport === importedScreener && (
+          <div
+            className="px-3 py-2 rounded-lg mono text-xs"
+            style={{
+              background: 'rgba(168,85,247,0.08)',
+              border: '1px solid rgba(168,85,247,0.3)',
+              color: 'var(--accent-purple)',
+            }}
+          >
+            ◈ Loaded from Screener&nbsp;
+            <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>
+              ({screenerImport.tickers.join(', ')}) · {screenerImport.rebalance} rebalance
+            </span>
+          </div>
+        )}
 
         {/* AI portfolio import banner */}
         {aiPortfolio?.assets?.length > 0 && aiPortfolio !== importedFrom && (
