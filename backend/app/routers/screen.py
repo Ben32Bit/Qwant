@@ -10,18 +10,18 @@ router = APIRouter()
 
 
 @router.post("/screen/chat")
-async def screen_chat(request: ChatRequest, req: Request):
+async def screen_chat(chat_request: ChatRequest):
     """
-    AI-powered screener: interprets natural language and runs the screen.
+    AI-powered screener: interprets natural language, runs the screen with real
+    market data, then feeds results back to Claude for an informed narrative.
     Returns screener results + AI chat text.
     """
-    screen_req, ai_text = call_screener_ai(
-        message=request.message,
-        conversation_history=request.conversation_history,
+    screen_result, ai_text = call_screener_ai(
+        message=chat_request.message,
+        conversation_history=chat_request.conversation_history,
     )
-    result = run_screener(screen_req)
     return {
-        "screen_result": result.model_dump(),
+        "screen_result": screen_result.model_dump(),
         "ai_response": ai_text,
     }
 

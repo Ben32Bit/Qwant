@@ -4,12 +4,38 @@ import remarkGfm from 'remark-gfm'
 
 const SUGGESTIONS = [
   'Top return sector ETF each quarter, 2022–2025',
-  'Best Sharpe ratio among FAANG stocks by year',
+  'Best Sharpe among FAANG stocks by year since 2018',
   'Least volatile asset class each month in 2023',
   'Top momentum stock (AAPL, MSFT, NVDA, META, GOOGL) each quarter',
-  'Biggest max drawdown winner among bonds each quarter, 2020–2024',
+  'Most resilient bond ETF each quarter, 2020–2024',
   'Best performing global market each year since 2018',
+  'Which sector led each month in 2024?',
+  'Top commodity each quarter: GLD, SLV, USO, DBC',
 ]
+
+function ScreenerSuggestions({ onSelect }) {
+  return (
+    <div className="p-4">
+      <p className="text-xs mb-3" style={{ color: 'var(--text-secondary)' }}>
+        Try one of these examples:
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {SUGGESTIONS.map((s) => (
+          <button
+            key={s}
+            onClick={() => onSelect(s)}
+            className="px-3 py-1.5 rounded text-xs border transition-all text-left"
+            style={{ borderColor: 'var(--border)', color: 'var(--text-secondary)', background: 'var(--bg-card)' }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent-purple)'; e.currentTarget.style.color = 'var(--text-primary)' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 const MD_COMPONENTS = {
   ul: ({ children }) => <ul className="space-y-1 my-1.5">{children}</ul>,
@@ -145,34 +171,11 @@ export default function StockScreenerPanel({ onScreenResult, loading, setLoading
               <p className="text-sm mb-1" style={{ color: 'var(--text-primary)' }}>
                 Ask which assets performed best — by any metric, any window.
               </p>
-              <p className="text-xs mb-6" style={{ color: 'var(--text-secondary)' }}>
+              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
                 Results link directly to portfolio backtesting.
               </p>
-              <div className="w-full space-y-2">
-                {SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => handleSend(s)}
-                    className="w-full text-left text-xs px-3 py-2 rounded border transition-colors"
-                    style={{
-                      borderColor: 'rgba(168,85,247,0.2)',
-                      background: 'rgba(168,85,247,0.04)',
-                      color: 'var(--text-secondary)',
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.borderColor = 'rgba(168,85,247,0.5)'
-                      e.currentTarget.style.color = 'var(--text-primary)'
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.borderColor = 'rgba(168,85,247,0.2)'
-                      e.currentTarget.style.color = 'var(--text-secondary)'
-                    }}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
             </div>
+            <ScreenerSuggestions onSelect={(s) => { setInput(s); textareaRef.current?.focus() }} />
           </div>
         ) : (
           <div className="px-4 pt-4">

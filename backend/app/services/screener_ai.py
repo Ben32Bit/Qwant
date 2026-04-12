@@ -1,6 +1,5 @@
 import anthropic
 import os
-import json
 from datetime import date
 from app.models.screener import ScreenRequest, ScreenerResult
 
@@ -27,16 +26,15 @@ Call this ONCE with all the parameters needed. You do NOT need to do research fi
 - "tech stocks" / "mega-cap tech" → AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA, AVGO, ORCL
 - "FAANG" → META, AAPL, AMZN, NFLX, GOOGL
 - "global / international markets" → VTI, EFA, EEM, VEA, VWO, EWJ, EWZ, FXI
-- "asset classes" → SPY, TLT, GLD, VNQ, DBC, HYG, EEM, BTC-USD
-- "bonds" → TLT, IEF, SHY, LQD, HYG, AGG, BND, TIPS
-- "commodities" → GLD, SLV, USO, DBC, CPER, WEAT, CORN
-- "crypto" → BTC-USD, ETH-USD, SOL-USD (yfinance supported)
+- "asset classes" → SPY, TLT, GLD, VNQ, DBC, HYG, EEM
+- "bonds" → TLT, IEF, SHY, LQD, HYG, AGG, BND
+- "commodities" → GLD, SLV, USO, DBC, CPER
 - Specific tickers mentioned → use exactly those
 
 ## Window Frequency
 - "quarterly" / "each quarter" → window_freq="quarterly"
-- "monthly" / "each month" / "every month" → window_freq="monthly"
-- "annually" / "each year" / "year by year" → window_freq="annually"
+- "monthly" / "each month" → window_freq="monthly"
+- "annually" / "each year" → window_freq="annually"
 - "weekly" → window_freq="weekly"
 - Default when unspecified: "quarterly"
 
@@ -47,19 +45,19 @@ Call this ONCE with all the parameters needed. You do NOT need to do research fi
 - Default: 3
 
 ## Date Range
-- If user says "last 3 years" → calculate from today
-- If user gives a specific range (e.g. "2020 to 2024") → use that
+- "last 3 years" → calculate from today
+- Specific range e.g. "2020 to 2024" → use that
 - Default: last 3 years
 
-## Your Chat Reply (after calling run_screen)
-Write exactly 4–5 bullet points. No headers. Be specific and insightful:
+## Your Chat Reply
+After seeing the REAL results, write exactly 4–5 bullet points. No headers. Be specific:
 - What was screened (universe, period, metric)
-- The most notable pattern or winner across windows
-- Any consistency or rotation you noticed (e.g., "same sector won 6 of 8 quarters")
-- One risk or limitation of this screening approach
+- The standout winner(s) and how many windows they dominated
+- Any notable rotation pattern or regime shift you see
+- One key risk or limitation of this approach
 - End with: "→ Click **Backtest Rotation Strategy** to test this as a live momentum portfolio"
 
-Keep the reply SHORT and data-aware. Reference actual tickers and windows where possible."""
+Reference actual tickers and window counts from the results provided to you."""
 
 RUN_SCREEN_TOOL = {
     "name": "run_screen",
@@ -78,21 +76,13 @@ RUN_SCREEN_TOOL = {
             "window_freq": {
                 "type": "string",
                 "enum": ["weekly", "monthly", "quarterly", "annually"],
-                "description": "Time window granularity",
             },
             "metric": {
                 "type": "string",
                 "enum": ["return", "sharpe", "volatility", "max_drawdown", "momentum_3m"],
-                "description": "Metric to rank assets by within each window",
             },
-            "top_n": {
-                "type": "integer",
-                "description": "Number of top assets to highlight per window (default 3)",
-            },
-            "screen_description": {
-                "type": "string",
-                "description": "Brief human-readable summary of what was screened",
-            },
+            "top_n": {"type": "integer", "description": "Top N assets per window (default 3)"},
+            "screen_description": {"type": "string"},
         },
     },
 }
@@ -104,14 +94,45 @@ def _default_dates() -> tuple[str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
+def _summarise_results(result: ScreenerResult) -> str:
+    """Build a compact text summary of screener results for Claude's narrative step."""
+    lines = [
+        f"Screen: {result.screen_description or result.metric_label}",
+        f"Universe: {', '.join(result.tickers)}",
+        f"Windows ({result.window_freq}): {len(result.windows)} total",
+        "",
+        "Winners per window:",
+    ]
+    for w in result.windows:
+        top = [f"#{r.rank} {r.ticker} ({r.metric_value:+.2%})"
+               if result.metric in ("return", "volatility", "max_drawdown", "momentum_3m")
+               else f"#{r.rank} {r.ticker} ({r.metric_value:.2f})"
+               for r in w.rankings[:result.top_n]]
+        lines.append(f"  {w.label}: {', '.join(top)}")
+
+    # Win counts
+    from collections import Counter
+    win_counts = Counter(w.winner for w in result.windows if w.winner)
+    lines.append("")
+    lines.append("Win counts: " + ", ".join(
+        f"{t}: {c}" for t, c in win_counts.most_common(5)
+    ))
+    return "\n".join(lines)
+
+
 def call_screener_ai(
     message: str,
     conversation_history: list,
-) -> tuple[ScreenRequest, str]:
+) -> tuple[ScreenerResult, str]:
     """
-    Single-shot AI call: Claude reads the message and calls run_screen once.
-    Returns (ScreenRequest, ai_chat_text).
+    1. Claude calls run_screen tool to choose parameters.
+    2. Backend runs the actual screener with real market data.
+    3. Real results are passed back to Claude so it writes an informed narrative.
+
+    Returns (ScreenerResult, ai_chat_text).
     """
+    from app.services.screener_engine import run_screener
+
     start, end = _default_dates()
 
     messages = [
@@ -126,13 +147,13 @@ def call_screener_ai(
         "cache_control": {"type": "ephemeral"},
     }]
 
-    # Step 1: Claude decides what to screen
+    # ── Step 1: Claude chooses screening parameters ────────────────────────────
     response = client.messages.create(
         model=MODEL,
         max_tokens=1024,
         system=system,
         tools=[RUN_SCREEN_TOOL],
-        tool_choice={"type": "required"},   # must call the tool
+        tool_choice={"type": "required"},
         messages=messages,
     )
 
@@ -142,6 +163,7 @@ def call_screener_ai(
 
     tc = tool_calls[0]
     inp = tc.input
+
     screen_req = ScreenRequest(
         tickers=inp["tickers"],
         start_date=inp.get("start_date", start),
@@ -152,14 +174,19 @@ def call_screener_ai(
         screen_description=inp.get("screen_description", ""),
     )
 
-    # Step 2: Claude writes the chat reply
+    # ── Step 2: Run the actual screener with real market data ──────────────────
+    screen_result = run_screener(screen_req)
+
+    # ── Step 3: Feed real results to Claude so it can write an informed reply ──
+    result_summary = _summarise_results(screen_result)
+
     messages.append({"role": "assistant", "content": response.content})
     messages.append({
         "role": "user",
         "content": [{
             "type": "tool_result",
             "tool_use_id": tc.id,
-            "content": "Screen parameters accepted. Results are being computed now.",
+            "content": f"Screen complete. Here are the real results:\n\n{result_summary}",
         }],
     })
 
@@ -174,4 +201,4 @@ def call_screener_ai(
         b.text for b in final.content if hasattr(b, "text") and b.text
     ).strip()
 
-    return screen_req, ai_text
+    return screen_result, ai_text
