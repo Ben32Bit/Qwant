@@ -4,6 +4,22 @@ This file tracks all changes, decisions, and project state. Updated by Claude Co
 
 ---
 
+## 2026-04-13 — Markdown rendering in chat + concise AI chat format
+
+**What:** AI chat messages were rendering raw markdown (## headers, - bullets as plain text). Fixed by adding react-markdown to MessageBubble. Also clarified the system prompt so the chat bubble stays to a brief 3–5 bullet summary while the full analysis goes in display_config.narrative (results panel). Added "Suggested Next Steps" section to narrative template with research-paper-informed suggestions.
+
+**Files affected:**
+- `frontend/src/components/Chat/MessageBubble.jsx` — replaced `{message.content}` with `<ReactMarkdown>` for AI messages; custom component overrides maintain terminal aesthetic (▸ bullets, monospace headers, accent-blue)
+- `frontend/package.json` / `package-lock.json` — added `react-markdown@10.1.0` + `remark-gfm`
+- `backend/app/services/ai_service.py` — split Output Format into two sections: (1) display_config.narrative = full detailed markdown analysis in results panel; (2) final chat message = brief 3–5 bullets with a suggested next step. Prevents the full analysis wall-of-text appearing in the chat bubble.
+
+**Decisions:**
+- AiNarrative.jsx already has its own markdown parser — left untouched, no regression
+- User messages and error messages rendered as plain text (no markdown parsing needed)
+- react-markdown v10 uses ESM; Vite handles it natively, no config changes needed
+
+---
+
 ## 2026-04-12 — Bailey Papers + Concise AI Output
 
 **What:** Integrated "Deflated Sharpe Ratio" and "Probability of Backtest Overfitting" best practices from Bailey & Lopez de Prado into the backtesting and AI narrative layers. Also tightened AI output to concise bullet points.

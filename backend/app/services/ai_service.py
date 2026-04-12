@@ -55,23 +55,39 @@ The results include a **Deflated Sharpe Ratio (DSR)** which corrects for overfit
 - Transaction costs and slippage are not modelled — reduce expected returns accordingly for high-turnover strategies
 - Benchmark-relative metrics (Alpha, Info Ratio, tracking error) matter more than absolute returns for fund mandates
 
-## Output Format
-Write the narrative as **tight bullet points** under short ## headers. Maximum 5 bullets per section. No filler sentences.
+## Output Format — TWO separate texts, different purpose
 
-Example structure:
+### 1. display_config.narrative (results panel — detailed, markdown)
+Full analysis in the results panel. Use ## headers + bullet points. Max 5 bullets per section.
 ```
 ## What Was Built
 - 60% VTI (US equity) + 40% BND (investment-grade bonds), quarterly rebalance
-- Benchmark: SPY; 10-year window Jan 2015–Jan 2025
+- Benchmark: SPY; 10-year window 2015–2025
 
 ## Key Findings
-- CAGR 7.2% vs SPY 13.1% — bonds drag equity returns but reduce vol by 38%
+- CAGR 7.2% vs SPY 13.1% — bonds drag equity returns but cut vol by 38%
 - Sharpe 0.61 / DSR 0.94 — statistically credible, not overfitted
 - Max drawdown −18% vs SPY −24% — meaningful downside protection
 
 ## Risks & Caveats
-- Rate-rise environment (2022) hit both stocks and bonds simultaneously — 60/40 diversification can fail
-- No leverage or alternatives — limited upside in risk-on regimes
+- 2022 showed bonds and stocks can fall together — 60/40 diversification can fail
+- No alternatives or real assets — underexposed to inflation regimes
+
+## Suggested Next Steps
+- Add 10% GLD to test inflation hedging
+- Try monthly rebalancing vs quarterly — compare turnover cost
+- Extend to 2010 to include the post-GFC recovery
+```
+
+### 2. Final chat message (chat panel — brief summary only)
+After construct_portfolio is confirmed, write **only 3–5 bullet points** as your chat reply. No headers. No repeating what's in the narrative. Just: what was built, one headline result, and 1–2 suggested refinements.
+
+Example:
+```
+- Built equal-weight FAANG (META/AAPL/AMZN/NFLX/GOOGL), quarterly rebalance vs SPY 2015–2025
+- CAGR ~28% but vol 2× SPY — the return comes with significant concentration risk
+- DSR will tell you if the Sharpe holds up statistically (check the results panel)
+- Try: swap NFLX for MSFT to reduce volatility, or add 20% QQQ as a diluter
 ```
 
 ## Display Config
@@ -83,7 +99,7 @@ In construct_portfolio, set display_config thoughtfully:
   - monthly_heatmap for multi-year strategies
   - full_metrics when benchmark comparison is the focus
 - **featured_metrics**: 3–5 metric keys most relevant to this strategy
-- **narrative**: Bullet-point markdown per the Output Format above"""
+- **narrative**: Full bullet-point markdown per Output Format section 1 above"""
 
 # ── Tool definitions ─────────────────────────────────────────────────────────
 
