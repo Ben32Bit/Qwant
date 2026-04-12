@@ -30,17 +30,33 @@ function CustomTooltip({ active, payload, label }) {
   )
 }
 
-export default function EquityCurve({ equityCurve, benchmarkCurve, loading }) {
+const FX_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD', 'SGD', 'HKD', 'CNH']
+
+export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loading }) {
   const [logScale, setLogScale] = useState(false)
+  const [currency, setCurrency] = useState('USD')
+
+  // Use FX-adjusted curve when a non-USD currency is selected
+  const activeCurve = useMemo(() => {
+    if (currency === 'USD' || !fxCurves?.[currency]) return equityCurve
+    return fxCurves[currency]
+  }, [currency, equityCurve, fxCurves])
 
   const data = useMemo(() => {
-    if (!equityCurve) return []
-    return equityCurve.map((pt, i) => ({
+    if (!activeCurve) return []
+    // Build a date→benchmark map for fast lookup (benchmark stays in USD)
+    const bmMap = {}
+    if (currency === 'USD' && benchmarkCurve) {
+      benchmarkCurve.forEach(pt => { bmMap[pt.date] = pt.value })
+    }
+    return activeCurve.map(pt => ({
       date: pt.date,
       Portfolio: pt.value,
-      Benchmark: benchmarkCurve?.[i]?.value ?? null,
+      ...(currency === 'USD' && bmMap[pt.date] != null ? { Benchmark: bmMap[pt.date] } : {}),
     }))
-  }, [equityCurve, benchmarkCurve])
+  }, [activeCurve, benchmarkCurve, currency])
+
+  const hasFx = fxCurves && Object.keys(fxCurves).length > 0
 
   if (loading) {
     return (
@@ -72,18 +88,42 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, loading }) {
       <div className="flex items-center justify-between mb-4">
         <h3 className="mono font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
           Equity Curve
+          {currency !== 'USD' && (
+            <span className="ml-2 text-xs font-normal" style={{ color: 'var(--accent-yellow)' }}>
+              · {currency}-adjusted
+            </span>
+          )}
         </h3>
-        <button
-          onClick={() => setLogScale((v) => !v)}
-          className="mono text-xs px-2 py-1 rounded border"
-          style={{
-            borderColor: logScale ? 'var(--accent-blue)' : 'var(--border)',
-            color: logScale ? 'var(--accent-blue)' : 'var(--text-secondary)',
-            background: 'transparent',
-          }}
-        >
-          {logScale ? 'LOG' : 'LINEAR'}
-        </button>
+        <div className="flex items-center gap-2">
+          {hasFx && (
+            <select
+              value={currency}
+              onChange={e => setCurrency(e.target.value)}
+              className="mono text-xs px-2 py-1 rounded border"
+              style={{
+                borderColor: currency !== 'USD' ? 'var(--accent-yellow)' : 'var(--border)',
+                color: currency !== 'USD' ? 'var(--accent-yellow)' : 'var(--text-secondary)',
+                background: 'var(--bg-card)',
+                cursor: 'pointer',
+              }}
+            >
+              {FX_CURRENCIES.filter(c => c === 'USD' || fxCurves?.[c]).map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={() => setLogScale((v) => !v)}
+            className="mono text-xs px-2 py-1 rounded border"
+            style={{
+              borderColor: logScale ? 'var(--accent-blue)' : 'var(--border)',
+              color: logScale ? 'var(--accent-blue)' : 'var(--text-secondary)',
+              background: 'transparent',
+            }}
+          >
+            {logScale ? 'LOG' : 'LINEAR'}
+          </button>
+        </div>
       </div>
 
       <ResponsiveContainer width="100%" height={240}>

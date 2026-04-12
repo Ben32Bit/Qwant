@@ -8,8 +8,11 @@ from app.models.backtest_result import (
     BacktestResult, TimeSeriesPoint, DrawdownPoint,
     MonthlyReturns, PortfolioMetrics, RollingMetrics,
 )
-from app.utils.constants import TRADING_DAYS_PER_YEAR
+from app.utils.constants import TRADING_DAYS_PER_YEAR, FX_PAIRS
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 RISK_FREE_RATE = float(os.getenv("RISK_FREE_RATE", "0.05"))
 MAX_CHART_POINTS = 500  # thin series for frontend performance
@@ -207,6 +210,9 @@ def run_full_backtest(portfolio_input: PortfolioInput) -> BacktestResult:
                 rec[t] = round(float(row[t]), 4)
         wh_records.append(rec)
 
+    # FX-adjusted equity curves
+    fx_curves = _compute_fx_curves(portfolio_series, portfolio_input.start_date, portfolio_input.end_date)
+
     return BacktestResult(
         equity_curve=equity_curve,
         benchmark_curve=bm_curve,
@@ -217,4 +223,50 @@ def run_full_backtest(portfolio_input: PortfolioInput) -> BacktestResult:
         rebalance_dates=rebalance_dates_list,
         rolling_metrics=rolling,
         correlation_matrix=corr_matrix,
+        fx_curves=fx_curves,
     )
+
+
+def _compute_fx_curves(
+    portfolio_series: pd.Series,
+    start_date: str,
+    end_date: str,
+) -> dict[str, list[TimeSeriesPoint]]:
+    """Return FX-adjusted equity curves for each major currency pair."""
+    import yfinance as yf
+
+    fx_curves: dict[str, list[TimeSeriesPoint]] = {}
+
+    for currency, (ticker, invert) in FX_PAIRS.items():
+        try:
+            raw = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=True)
+            if raw.empty:
+                continue
+
+            close = raw["Close"]
+            if hasattr(close, "squeeze"):
+                close = close.squeeze()
+            close = close.dropna()
+
+            # Align FX to portfolio dates (forward-fill weekends/holidays)
+            fx_aligned = close.reindex(portfolio_series.index, method="ffill").dropna()
+            if fx_aligned.empty or fx_aligned.iloc[0] == 0:
+                continue
+
+            # Normalise to "foreign currency per 1 USD"
+            rate = (1.0 / fx_aligned) if invert else fx_aligned
+
+            # Adjust portfolio: FCY value = USD_portfolio × (rate_t / rate_0)
+            fx_factor = rate / rate.iloc[0]
+            adjusted = portfolio_series.reindex(rate.index) * fx_factor
+            adjusted = adjusted.dropna()
+
+            thinned = _thin(adjusted)
+            fx_curves[currency] = [
+                TimeSeriesPoint(date=d.strftime("%Y-%m-%d"), value=round(float(v), 4))
+                for d, v in thinned.items()
+            ]
+        except Exception as exc:
+            logger.warning("FX curve failed for %s (%s): %s", currency, ticker, exc)
+
+    return fx_curves

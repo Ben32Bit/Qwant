@@ -1,3 +1,19 @@
+# FX pairs — (yfinance ticker, invert)
+# invert=True  → ticker is FOREIGN/USD (e.g. EURUSD=X = USD per EUR → 1/rate = EUR per USD)
+# invert=False → ticker is USD/FOREIGN (e.g. USDSGD=X = SGD per USD → use directly)
+FX_PAIRS = {
+    "EUR": ("EURUSD=X", True),
+    "GBP": ("GBPUSD=X", True),
+    "JPY": ("USDJPY=X", False),
+    "CHF": ("USDCHF=X", False),
+    "CAD": ("USDCAD=X", False),
+    "AUD": ("AUDUSD=X", True),
+    "NZD": ("NZDUSD=X", False),
+    "SGD": ("USDSGD=X", False),
+    "HKD": ("USDHKD=X", False),
+    "CNH": ("USDCNH=X", False),
+}
+
 BENCHMARK_TICKERS = {
     "SPY": "S&P 500 (SPY)",
     "QQQ": "Nasdaq 100 (QQQ)",

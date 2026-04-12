@@ -139,6 +139,7 @@ export default function ResultsPanel({ backtest, portfolio, displayConfig, loadi
                 <EquityCurve key="equity_curve"
                   equityCurve={backtest?.equity_curve}
                   benchmarkCurve={backtest?.benchmark_curve}
+                  fxCurves={backtest?.fx_curves}
                   loading={loading}
                 />
               )

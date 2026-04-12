@@ -66,3 +66,4 @@ class BacktestResult(BaseModel):
     rebalance_dates: Optional[list[str]] = None       # dates when weights were reset
     rolling_metrics: Optional[RollingMetrics] = None
     correlation_matrix: Optional[dict] = None  # {ticker: {ticker: float}}
+    fx_curves: Optional[dict[str, list[TimeSeriesPoint]]] = None  # {currency: [{date, value}]}
