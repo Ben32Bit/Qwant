@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from app.models.chat import ChatRequest, ChatResponse, PortfolioResponse, DisplayConfig
 from app.services.ai_service import call_ai
 from app.services.backtest_engine import run_full_backtest
@@ -7,16 +9,18 @@ from app.services.optimization import apply_strategy
 import os
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 RISK_FREE_RATE = float(os.getenv("RISK_FREE_RATE", "0.05"))
 
 _DEFAULT_SECTIONS = ["equity_curve", "drawdown", "metrics_summary", "weight_drift"]
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
+@limiter.limit("20/hour")
+async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     try:
         # Step 1: Agentic AI loop — may call get_asset_statistics before constructing
-        portfolio_input, ai_text, strategy_summary, raw_display = call_ai(request)
+        portfolio_input, ai_text, strategy_summary, raw_display = call_ai(body)
 
         # Step 2: Apply optimisation strategy if not custom
         if portfolio_input.strategy != "custom":

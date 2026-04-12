@@ -1,0 +1,15 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Nightly price refresh — weekdays at 9:30 PM UTC (4:30 PM ET, after market close)
+# Uncomment once the service is deployed and stable:
+# [[crons]]
+# schedule = "30 21 * * 1-5"
+# command = "python -m scripts.refresh_prices"

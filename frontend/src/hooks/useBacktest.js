@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react'
 import axios from 'axios'
-
-const API_BASE = '/api'
+import { API_BASE } from '../utils/api.js'
 
 export function useBacktest() {
   const [result, setResult] = useState(null)

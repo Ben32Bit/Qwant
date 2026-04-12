@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback } from 'react'
 import { downloadTemplate, parsePortfolioFile } from '../../utils/portfolioTemplate.js'
+import { API_BASE } from '../../utils/api.js'
 
 const REBALANCE_OPTIONS = ['none', 'daily', 'weekly', 'monthly', 'quarterly', 'annually']
 const BENCHMARK_OPTIONS = ['SPY', 'QQQ', 'IWM', 'AGG', 'EFA', 'EEM', 'GLD', 'TLT', 'VTI', 'BND']
@@ -156,7 +157,7 @@ export default function ManualBuilderPanel({ onResult, loading, setLoading }) {
 
     setLoading(true)
     try {
-      const res = await fetch('/api/backtest', {
+      const res = await fetch(`${API_BASE}/backtest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
