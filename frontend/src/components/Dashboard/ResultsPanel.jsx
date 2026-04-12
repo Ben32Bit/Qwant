@@ -79,10 +79,14 @@ export default function ResultsPanel({ backtest, portfolio, displayConfig, loadi
   const isEmpty = !backtest && !loading
 
   const sections = useMemo(() => {
-    if (!displayConfig?.sections?.length) {
-      return ['equity_curve', 'drawdown', 'metrics_summary']
+    const raw = displayConfig?.sections?.length
+      ? displayConfig.sections
+      : ['equity_curve', 'drawdown', 'metrics_summary']
+    // If both summary and full are present, keep only full_metrics (superset)
+    if (raw.includes('full_metrics') && raw.includes('metrics_summary')) {
+      return raw.filter(s => s !== 'metrics_summary')
     }
-    return displayConfig.sections
+    return raw
   }, [displayConfig])
 
   const hasBenchmark = !!backtest?.benchmark_curve
