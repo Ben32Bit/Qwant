@@ -61,7 +61,7 @@ This file tracks all changes, decisions, and project state. Updated by Claude Co
 **Decisions:**
 - DSR uses `n_trials=1` (single strategy per request). DSR then measures significance of SR > 0 under non-normality. A more aggressive N (e.g. 50) would penalise strategies harder — deferred until user asks.
 - Bailey PBO (CSCV algorithm) not implemented as it requires multiple strategy variants. Referenced in AI best practices text instead.
-- DSR thresholds: ≥0.95 = "low overfit risk" (green), 0.90–0.95 = "moderate risk" (yellow), <0.90 = "possible overfit" (red).
+- DSR thresholds: >=0.95 = "low overfit risk" (green), 0.90–0.95 = "moderate risk" (yellow), <0.90 = "possible overfit" (red).
 
 **State:** Backend computes DSR on every backtest. AI narrative now uses bullet-point format with DSR-aware overfitting warnings. Frontend displays DSR with colour coding.
 
@@ -138,14 +138,14 @@ Implemented Phases 1 and 2 simultaneously since they are tightly coupled.
 - `frontend/src/components/Dashboard/EquityCurve.jsx` — Recharts equity curve (log/linear toggle)
 - `frontend/src/components/Dashboard/DrawdownChart.jsx` — Underwater drawdown area chart
 - `frontend/src/components/Dashboard/MetricsCards.jsx` — Full metrics grid (4 sections)
-- `frontend/src/components/Dashboard/MonthlyHeatmap.jsx` — Year × month returns heatmap
+- `frontend/src/components/Dashboard/MonthlyHeatmap.jsx` — Year x month returns heatmap
 
 **Key decisions:**
 - Used `cachetools.TTLCache` for price and AI response caching (thread-safe with Lock)
 - Anthropic prompt caching (`cache_control: ephemeral`) on the system prompt to reduce costs
-- Backtest engine chart data thinned to ≤500 points for rendering performance
+- Backtest engine chart data thinned to <=500 points for rendering performance
 - `yfinance auto_adjust=True` gives split/dividend-adjusted prices as "Close"
-- Vite proxy `/api → localhost:8000` avoids CORS issues in dev
+- Vite proxy `/api -> localhost:8000` avoids CORS issues in dev
 
 **To run locally:**
 ```bash
@@ -184,7 +184,7 @@ npm run dev
 **Backend:**
 - `ai_service.py` — Full rewrite to agentic loop. Claude can now call `get_asset_statistics` (up to 5 iterations) before `construct_portfolio`. System prompt instructs Claude to always research before deciding on data-driven weights. Prompt caching still applied to system prompt.
 - `data_service.py` — Added `get_asset_statistics_for_ai()`: computes annual return, volatility, Sharpe, max drawdown, correlation to benchmark, and full pairwise correlation matrix for a list of candidate tickers. Also added `fetch_prices_partial()` which silently drops unavailable tickers (used in research tool).
-- `backtest_engine.py` — Added `_compute_rolling_metrics()`: 252d rolling Sharpe, 60d rolling volatility, 126d rolling beta. Added asset correlation matrix computation. Both included in `BacktestResult`. Data thinned to ≤500 points before sending to frontend.
+- `backtest_engine.py` — Added `_compute_rolling_metrics()`: 252d rolling Sharpe, 60d rolling volatility, 126d rolling beta. Added asset correlation matrix computation. Both included in `BacktestResult`. Data thinned to <=500 points before sending to frontend.
 - `models/backtest_result.py` — Added `RollingMetrics` model, `rolling_metrics` and `correlation_matrix` fields to `BacktestResult`.
 - `models/chat.py` — Added `DisplayConfig` model (sections, featured_metrics, narrative). Added `display_config` field to `ChatResponse`.
 - `routers/chat.py` — Passes `display_config` from AI through to response.
@@ -197,13 +197,13 @@ npm run dev
 - `useChat.js` — Added `displayConfig` state, passed through from API response.
 - `SplitView.jsx` — Forwards `displayConfig` to ResultsPanel.
 
-**Also fixed:** Upgraded yfinance from 0.2.49 → 1.2.1 (previous version had a breaking API change with Yahoo Finance causing all downloads to fail).
+**Also fixed:** Upgraded yfinance from 0.2.49 -> 1.2.1 (previous version had a breaking API change with Yahoo Finance causing all downloads to fail).
 
 **Key decisions:**
 - MAX_RESEARCH_ITERATIONS = 5 to prevent infinite loops
 - `get_asset_statistics` silently drops invalid tickers (`fetch_prices_partial`) so one bad ticker (e.g. VIX) doesn't block the whole research call
 - display_config defaults to `["equity_curve", "drawdown", "metrics_summary"]` if AI omits it
-- Rolling metrics thinned server-side to ≤500 points
+- Rolling metrics thinned server-side to <=500 points
 
 **Pending:**
 - [ ] Return distribution histogram
@@ -219,7 +219,7 @@ npm run dev
 **What:** Added `WeightDriftChart` — a full timeseries of how each holding's weight evolves over the backtest period, with rebalance event markers.
 
 **Backend changes:**
-- `backtest_engine.py` — `run_backtest()` now returns `rebalance_date_strs` (list of dates when weights were reset). Weight history thinned to ≤300 points before sending to frontend. Each record contains only the portfolio tickers (not benchmark).
+- `backtest_engine.py` — `run_backtest()` now returns `rebalance_date_strs` (list of dates when weights were reset). Weight history thinned to <=300 points before sending to frontend. Each record contains only the portfolio tickers (not benchmark).
 - `models/backtest_result.py` — Added `rebalance_dates: list[str]` field to `BacktestResult`.
 - `ai_service.py` — Added `weight_drift` to the `display_config.sections` enum and instructed Claude to include it for multi-asset portfolios.
 - `routers/chat.py` — Updated default sections to include `weight_drift`.
@@ -244,4 +244,26 @@ npm run dev
 - [ ] Editable portfolio weights table
 - [ ] Rate limiting
 - [ ] Mobile layout
-nnnn- rontend/src/utils/exportExcel.js (new) � SheetJS workbook builder with 6 sheets (Summary, Performance, Holdings, Monthly Returns, Rolling Metrics, Correlations)nn- Client-side export via SheetJS XLSX.writeFile (no server round-trip)n- All pct values stored as actual numbers (e.g. 12.34 not 0.1234)n**Pending:**n- [ ] Editable portfolio weights tablen- [ ] Mobile layout
+
+---
+
+## 2026-04-13 — Bug Fixes + Screener tool_choice Fix
+
+**What:** Fixed several bugs found during testing of the new AI Stock Screener tab and results panel.
+
+**Bug fixes:**
+- **`tool_choice={"type": "required"}` invalid** (`backend/app/services/screener_ai.py`): "required" is not a valid Anthropic API value — valid options are `"auto"`, `"any"`, or `{"type": "tool", "name": "..."}`. This caused the Anthropic API to reject the request with a non-JSON 500 error, which the frontend's `.catch()` handler converted to "Request failed". Fixed to `{"type": "any"}`.
+- **Duplicate metrics table** (`frontend/src/components/Dashboard/ResultsPanel.jsx`): AI was sometimes selecting both `metrics_summary` and `full_metrics` sections. Added deduplication — filters out `metrics_summary` when `full_metrics` is also present (full_metrics is a superset).
+- **Vercel deployment blocked**: Making the GitHub repo private triggered "Deployment Authorization" which blocked web-flow commits. Fixed by disabling Deployment Authorization in Vercel Settings -> Git. Build command also corrected from `vite build` to `npm run build`.
+
+**Current state:**
+- Portfolio backtester: fully working (AI chat, backtest engine, all charts, Excel export, DSR metrics, markdown chat rendering)
+- AI Stock Screener: code complete; `tool_choice` bug fixed and pushed to git — will be live after Railway redeploys
+- Rotation backtest: implemented with no-lookahead bias, wired to screener results panel
+- Screener -> Manual Build import: wired up via `screenerImport` prop
+
+**Pending:**
+- [ ] Verify screener end-to-end after Railway redeploys with the tool_choice fix
+- [ ] Return distribution histogram
+- [ ] Rate limiting
+- [ ] Mobile layout
