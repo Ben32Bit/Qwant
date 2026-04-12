@@ -166,7 +166,7 @@ export default function StockScreenerPanel({ onScreenResult, loading, setLoading
           <div className="flex flex-col h-full">
             <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
               <div className="mono font-bold text-2xl mb-2" style={{ color: 'var(--accent-purple)' }}>
-                ◈ SCREENER
+                ◈ QWANT
               </div>
               <p className="text-sm mb-1" style={{ color: 'var(--text-primary)' }}>
                 Ask which assets performed best — by any metric, any window.
