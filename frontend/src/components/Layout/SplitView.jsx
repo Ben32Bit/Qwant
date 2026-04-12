@@ -91,6 +91,8 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
               onResult={handleManualResult}
               loading={manualLoading}
               setLoading={setManualLoading}
+              aiPortfolio={portfolio}
+              aiBacktest={backtest}
             />
           )}
         </div>

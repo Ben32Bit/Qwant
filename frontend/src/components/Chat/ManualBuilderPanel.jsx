@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react'
+import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { downloadTemplate, parsePortfolioFile } from '../../utils/portfolioTemplate.js'
 import { API_BASE } from '../../utils/api.js'
 
@@ -92,12 +92,31 @@ function WeightBar({ rows }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ManualBuilderPanel({ onResult, loading, setLoading }) {
+export default function ManualBuilderPanel({ onResult, loading, setLoading, aiPortfolio, aiBacktest }) {
   const [rows, setRows] = useState(DEFAULT_ROWS)
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
   const [error, setError] = useState(null)
   const [uploadMsg, setUploadMsg] = useState(null)
+  const [importedFrom, setImportedFrom] = useState(null) // tracks last imported AI portfolio
   const fileInputRef = useRef(null)
+
+  // ── Import from AI portfolio ─────────────────────────────────────────────────
+  const loadFromAi = useCallback(() => {
+    if (!aiPortfolio?.assets?.length) return
+    setRows(aiPortfolio.assets.map(a => ({
+      ticker: a.ticker,
+      weight: String(a.weight),
+    })))
+    setSettings(prev => ({
+      startDate:  aiBacktest?.equity_curve?.[0]?.date ?? prev.startDate,
+      endDate:    aiBacktest?.equity_curve?.at(-1)?.date ?? prev.endDate,
+      rebalance:  aiPortfolio.rebalance_frequency ?? prev.rebalance,
+      benchmark:  aiPortfolio.benchmark ?? prev.benchmark,
+    }))
+    setError(null)
+    setUploadMsg(null)
+    setImportedFrom(aiPortfolio)
+  }, [aiPortfolio, aiBacktest])
 
   // ── Row management ──────────────────────────────────────────────────────────
   const updateRow = (i, field, value) =>
@@ -183,6 +202,25 @@ export default function ManualBuilderPanel({ onResult, loading, setLoading }) {
   return (
     <div className="flex flex-col h-full overflow-y-auto">
       <div className="p-4 space-y-4">
+
+        {/* AI portfolio import banner */}
+        {aiPortfolio?.assets?.length > 0 && aiPortfolio !== importedFrom && (
+          <button
+            onClick={loadFromAi}
+            className="w-full text-left px-3 py-2 rounded-lg mono text-xs"
+            style={{
+              background: 'rgba(74,158,255,0.08)',
+              border: '1px solid rgba(74,158,255,0.3)',
+              color: 'var(--accent-blue)',
+              cursor: 'pointer',
+            }}
+          >
+            ← Load AI portfolio&nbsp;
+            <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>
+              ({aiPortfolio.assets.map(a => a.ticker).join(', ')})
+            </span>
+          </button>
+        )}
 
         {/* Header actions */}
         <div className="flex items-center gap-2">
