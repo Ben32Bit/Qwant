@@ -50,10 +50,19 @@ class PortfolioMetrics(BaseModel):
     down_capture: Optional[float] = None
 
 
+class RollingMetrics(BaseModel):
+    sharpe: Optional[list[TimeSeriesPoint]] = None       # 252-day rolling Sharpe
+    volatility: Optional[list[TimeSeriesPoint]] = None   # 60-day rolling vol
+    beta: Optional[list[TimeSeriesPoint]] = None         # 126-day rolling beta
+
+
 class BacktestResult(BaseModel):
     equity_curve: list[TimeSeriesPoint]
     benchmark_curve: Optional[list[TimeSeriesPoint]] = None
     drawdown_series: list[DrawdownPoint]
     monthly_returns: MonthlyReturns
     metrics: PortfolioMetrics
-    weight_history: Optional[list[dict]] = None
+    weight_history: Optional[list[dict]] = None       # [{date, ticker: weight, ...}]
+    rebalance_dates: Optional[list[str]] = None       # dates when weights were reset
+    rolling_metrics: Optional[RollingMetrics] = None
+    correlation_matrix: Optional[dict] = None  # {ticker: {ticker: float}}

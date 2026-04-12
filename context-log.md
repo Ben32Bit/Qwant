@@ -109,3 +109,76 @@ npm run dev
 - [ ] Benchmark overlay toggle
 - [ ] Rate limiting middleware
 - [ ] Mobile-responsive layout
+
+---
+
+## 2026-04-12 — Agentic AI Loop + Dynamic Output (Phase 2 Enhancement)
+
+**Problem solved:** The AI was making a single blind pass — guessing tickers and weights without ever seeing real data. Data-driven strategies ("most uncorrelated", "best Sharpe") were hallucinated rather than computed.
+
+**What changed:**
+
+**Backend:**
+- `ai_service.py` — Full rewrite to agentic loop. Claude can now call `get_asset_statistics` (up to 5 iterations) before `construct_portfolio`. System prompt instructs Claude to always research before deciding on data-driven weights. Prompt caching still applied to system prompt.
+- `data_service.py` — Added `get_asset_statistics_for_ai()`: computes annual return, volatility, Sharpe, max drawdown, correlation to benchmark, and full pairwise correlation matrix for a list of candidate tickers. Also added `fetch_prices_partial()` which silently drops unavailable tickers (used in research tool).
+- `backtest_engine.py` — Added `_compute_rolling_metrics()`: 252d rolling Sharpe, 60d rolling volatility, 126d rolling beta. Added asset correlation matrix computation. Both included in `BacktestResult`. Data thinned to ≤500 points before sending to frontend.
+- `models/backtest_result.py` — Added `RollingMetrics` model, `rolling_metrics` and `correlation_matrix` fields to `BacktestResult`.
+- `models/chat.py` — Added `DisplayConfig` model (sections, featured_metrics, narrative). Added `display_config` field to `ChatResponse`.
+- `routers/chat.py` — Passes `display_config` from AI through to response.
+
+**Frontend:**
+- `AiNarrative.jsx` (new) — Renders AI's markdown analysis in the results panel. Supports ## headings, **bold**, bullet lists.
+- `CorrelationMatrix.jsx` (new) — Asset correlation heatmap (blue=positive, red=negative).
+- `RollingMetrics.jsx` (new) — Tabbed chart for rolling Sharpe / volatility / beta with configurable windows.
+- `ResultsPanel.jsx` — Fully dynamic. Renders only AI-chosen sections in AI-chosen order. Shows featured metrics strip and narrative at top. Section options: equity_curve, drawdown, metrics_summary, full_metrics, monthly_heatmap, correlation_matrix, rolling_metrics.
+- `useChat.js` — Added `displayConfig` state, passed through from API response.
+- `SplitView.jsx` — Forwards `displayConfig` to ResultsPanel.
+
+**Also fixed:** Upgraded yfinance from 0.2.49 → 1.2.1 (previous version had a breaking API change with Yahoo Finance causing all downloads to fail).
+
+**Key decisions:**
+- MAX_RESEARCH_ITERATIONS = 5 to prevent infinite loops
+- `get_asset_statistics` silently drops invalid tickers (`fetch_prices_partial`) so one bad ticker (e.g. VIX) doesn't block the whole research call
+- display_config defaults to `["equity_curve", "drawdown", "metrics_summary"]` if AI omits it
+- Rolling metrics thinned server-side to ≤500 points
+
+**Pending:**
+- [ ] Return distribution histogram
+- [ ] Editable portfolio weights table
+- [ ] Rate limiting
+- [ ] Mobile layout
+- [x] Excel export
+
+---
+
+## 2026-04-12 — Holdings Timeseries / Weight Drift Chart
+
+**What:** Added `WeightDriftChart` — a full timeseries of how each holding's weight evolves over the backtest period, with rebalance event markers.
+
+**Backend changes:**
+- `backtest_engine.py` — `run_backtest()` now returns `rebalance_date_strs` (list of dates when weights were reset). Weight history thinned to ≤300 points before sending to frontend. Each record contains only the portfolio tickers (not benchmark).
+- `models/backtest_result.py` — Added `rebalance_dates: list[str]` field to `BacktestResult`.
+- `ai_service.py` — Added `weight_drift` to the `display_config.sections` enum and instructed Claude to include it for multi-asset portfolios.
+- `routers/chat.py` — Updated default sections to include `weight_drift`.
+
+**Frontend changes:**
+- `WeightDriftChart.jsx` (new) — Stacked area chart (long-only) or line chart (mixed long/short) showing each holding's weight % over time. Features:
+  - Auto-selects stacked area vs line based on whether short positions exist
+  - Toggle between area and line mode (long-only portfolios)
+  - Vertical dashed reference lines at each rebalance date
+  - 10-color palette assigned per ticker
+  - Custom tooltip showing all ticker weights sorted by magnitude
+- `ResultsPanel.jsx` — Added `weight_drift` case to the dynamic section renderer.
+
+**Key decisions:**
+- Stacked area chart forced to line mode when shorts are present (stacking is misleading with negatives)
+- Weight history thinned server-side to 300 points (enough to show drift shape without sending 2500+ rows)
+- Rebalance lines drawn from index [1] onwards (skip day-0 reset which is just initialization)
+- First rebalance date is always day 1 (initialization), subsequent ones are the meaningful events shown
+
+**Pending:**
+- [ ] Return distribution histogram
+- [ ] Editable portfolio weights table
+- [ ] Rate limiting
+- [ ] Mobile layout
+nnnn- rontend/src/utils/exportExcel.js (new) � SheetJS workbook builder with 6 sheets (Summary, Performance, Holdings, Monthly Returns, Rolling Metrics, Correlations)nn- Client-side export via SheetJS XLSX.writeFile (no server round-trip)n- All pct values stored as actual numbers (e.g. 12.34 not 0.1234)n**Pending:**n- [ ] Editable portfolio weights tablen- [ ] Mobile layout

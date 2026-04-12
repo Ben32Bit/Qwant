@@ -7,6 +7,7 @@ export function useChat() {
   const [messages, setMessages] = useState([])
   const [portfolio, setPortfolio] = useState(null)
   const [backtest, setBacktest] = useState(null)
+  const [displayConfig, setDisplayConfig] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -36,6 +37,7 @@ export function useChat() {
       setMessages([...newMessages, assistantMessage])
       setPortfolio(data.portfolio)
       setBacktest(data.backtest)
+      setDisplayConfig(data.display_config || null)
     } catch (err) {
       const msg = err.response?.data?.detail || err.message || 'Unknown error'
       setError(msg)
@@ -52,8 +54,9 @@ export function useChat() {
     setMessages([])
     setPortfolio(null)
     setBacktest(null)
+    setDisplayConfig(null)
     setError(null)
   }, [])
 
-  return { messages, portfolio, backtest, loading, error, sendMessage, clearChat }
+  return { messages, portfolio, backtest, displayConfig, loading, error, sendMessage, clearChat }
 }

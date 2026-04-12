@@ -25,8 +25,15 @@ class PortfolioResponse(BaseModel):
     strategy_summary: Optional[str] = None
 
 
+class DisplayConfig(BaseModel):
+    sections: list[str] = ["equity_curve", "drawdown", "metrics_summary"]
+    featured_metrics: list[str] = ["cagr", "sharpe", "max_drawdown", "volatility"]
+    narrative: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     portfolio: PortfolioResponse
     backtest: BacktestResult
     ai_response: str
     strategy_summary: Optional[str] = None
+    display_config: DisplayConfig = DisplayConfig()

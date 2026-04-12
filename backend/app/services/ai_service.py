@@ -1,87 +1,158 @@
 import anthropic
 import os
 import json
-from datetime import date, timedelta
-from app.models.chat import ChatMessage, ChatRequest
+from datetime import date
+from app.models.chat import ChatRequest
 from app.models.portfolio import PortfolioInput, AssetInput
+from app.services.data_service import get_asset_statistics_for_ai
 
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 MODEL = "claude-sonnet-4-20250514"
+MAX_RESEARCH_ITERATIONS = 5
 
-SYSTEM_PROMPT = """You are a portfolio construction assistant for a backtesting platform. The user will describe a portfolio or investment strategy in natural language. Your job is to interpret their intent and call the construct_portfolio tool with concrete, investable parameters.
+SYSTEM_PROMPT = """You are an expert portfolio construction assistant backed by real market data.
 
-Rules:
-- Use real, currently tradable ticker symbols (US-listed ETFs and stocks)
-- Weights can be negative (short positions) and can sum to >1.0 (leverage)
-- Default date range: last 10 years to today if not specified
-- Default rebalancing: quarterly if not specified
-- Default benchmark: SPY if not specified
-- If the user asks for a strategy (min variance, max sharpe, risk parity, inverse vol, equal weight), set the "strategy" field and provide candidate tickers. The backend will compute optimal weights — you may provide equal weights as placeholders.
-- Always include a brief rationale for each holding
-- If the request is ambiguous, make reasonable assumptions and state them
-- Keep the strategy_summary concise (1-2 sentences)
-- After the tool call, briefly explain what you built and any assumptions made"""
+## Your Tools
+
+**get_asset_statistics** — research tool. Call this BEFORE constructing any data-driven portfolio.
+Use it to fetch real returns, volatilities, Sharpe ratios, drawdowns, and correlation matrices for candidate tickers.
+You may call it multiple times with different ticker sets or date ranges.
+
+**construct_portfolio** — finalisation tool. Call this ONCE when you have enough data to make informed decisions.
+
+## When to Research First
+Always call get_asset_statistics first when the user asks for:
+- "most uncorrelated", "lowest correlation", "diversified" strategies
+- "best Sharpe", "lowest volatility", "highest return" asset selection
+- Any strategy that requires ranking or filtering assets by a quantitative criterion
+- Momentum or factor-based selection
+
+For simple explicit portfolios ("60% SPY 40% BND"), you may skip research and go straight to construct_portfolio.
+
+## Rules
+- Use real, currently tradable US-listed tickers (ETFs and stocks). Never use ^VIX — use VIXY or VXX instead.
+- Weights can be negative (short) and sum to >1.0 (leverage)
+- Default date range: last 10 years if not specified
+- Default rebalance: quarterly
+- Default benchmark: SPY
+- State your assumptions clearly in the narrative
+
+## Display Config
+In construct_portfolio, set display_config thoughtfully:
+- **sections**: pick what's most relevant. Options: equity_curve, drawdown, metrics_summary, full_metrics, monthly_heatmap, correlation_matrix, rolling_metrics, weight_drift
+  - Always include: equity_curve, drawdown, metrics_summary
+  - Add weight_drift when ≥2 assets — it shows how holdings drift and snap back at rebalances
+  - Add correlation_matrix when ≥3 assets and diversification is the goal
+  - Add rolling_metrics when consistency/risk over time matters
+  - Add monthly_heatmap for multi-year strategies
+  - Add full_metrics when benchmark comparison is the focus
+- **featured_metrics**: 3–5 metric keys most relevant to this strategy
+- **narrative**: Write clear markdown analysis — explain what you built, your research findings, key risks, and what the user should focus on in the results. Use ## headers to structure it."""
+
+# ── Tool definitions ─────────────────────────────────────────────────────────
+
+GET_ASSET_STATISTICS_TOOL = {
+    "name": "get_asset_statistics",
+    "description": "Fetch real historical statistics for a list of tickers: annual return, volatility, Sharpe ratio, max drawdown, correlation to benchmark, and pairwise correlation matrix. Use this to make data-driven portfolio decisions.",
+    "input_schema": {
+        "type": "object",
+        "required": ["tickers", "start_date", "end_date"],
+        "properties": {
+            "tickers": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of ticker symbols to analyse (e.g. ['SPY','TLT','GLD','EEM','VNQ'])",
+            },
+            "start_date": {
+                "type": "string",
+                "description": "Start date YYYY-MM-DD",
+            },
+            "end_date": {
+                "type": "string",
+                "description": "End date YYYY-MM-DD",
+            },
+            "benchmark": {
+                "type": "string",
+                "description": "Ticker to compute correlation against. Default: SPY",
+            },
+        },
+    },
+}
 
 PORTFOLIO_TOOL = {
     "name": "construct_portfolio",
-    "description": "Construct a portfolio for backtesting from user's natural language description",
+    "description": "Finalise a portfolio for backtesting. Call this after completing any research.",
     "input_schema": {
         "type": "object",
         "required": ["assets", "start_date", "end_date"],
         "properties": {
             "assets": {
                 "type": "array",
-                "description": "List of assets with ticker symbols and target weights",
+                "description": "Assets with ticker and weight",
                 "items": {
                     "type": "object",
                     "required": ["ticker", "weight"],
                     "properties": {
-                        "ticker": {
-                            "type": "string",
-                            "description": "US-listed ticker symbol (e.g., AAPL, SPY, TLT)"
-                        },
+                        "ticker": {"type": "string"},
                         "weight": {
                             "type": "number",
-                            "description": "Target weight. Positive=long, negative=short. Can sum to >1 for leverage."
+                            "description": "Positive=long, negative=short. Can sum >1 for leverage.",
                         },
-                        "rationale": {
-                            "type": "string",
-                            "description": "Brief reason for including this asset"
-                        }
-                    }
-                }
+                        "rationale": {"type": "string"},
+                    },
+                },
             },
-            "start_date": {
-                "type": "string",
-                "description": "Backtest start date in YYYY-MM-DD format"
-            },
-            "end_date": {
-                "type": "string",
-                "description": "Backtest end date in YYYY-MM-DD format"
-            },
+            "start_date": {"type": "string", "description": "YYYY-MM-DD"},
+            "end_date": {"type": "string", "description": "YYYY-MM-DD"},
             "rebalance_frequency": {
                 "type": "string",
                 "enum": ["daily", "weekly", "monthly", "quarterly", "annually", "none"],
-                "description": "How often to rebalance to target weights. Default: quarterly"
             },
-            "benchmark": {
-                "type": "string",
-                "description": "Benchmark ticker for comparison. Default: SPY"
-            },
+            "benchmark": {"type": "string"},
             "strategy": {
                 "type": "string",
                 "enum": ["custom", "min_variance", "max_sharpe", "risk_parity", "inverse_vol", "equal_weight"],
-                "description": "Portfolio optimization strategy. 'custom' uses the provided weights as-is."
             },
-            "strategy_summary": {
-                "type": "string",
-                "description": "Brief summary of what was constructed and why"
-            }
-        }
-    }
+            "strategy_summary": {"type": "string"},
+            "display_config": {
+                "type": "object",
+                "description": "Control which sections and metrics the UI shows",
+                "properties": {
+                    "sections": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "equity_curve",
+                                "drawdown",
+                                "metrics_summary",
+                                "full_metrics",
+                                "monthly_heatmap",
+                                "correlation_matrix",
+                                "rolling_metrics",
+                                "weight_drift",
+                            ],
+                        },
+                        "description": "Ordered list of sections to display",
+                    },
+                    "featured_metrics": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Metric keys to feature prominently",
+                    },
+                    "narrative": {
+                        "type": "string",
+                        "description": "Markdown narrative shown in the results panel explaining the strategy, research findings, and key risks",
+                    },
+                },
+            },
+        },
+    },
 }
 
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _default_dates() -> tuple[str, str]:
     end = date.today()
@@ -89,10 +160,9 @@ def _default_dates() -> tuple[str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
-def parse_portfolio_from_tool(tool_input: dict) -> PortfolioInput:
-    """Convert AI tool call output to PortfolioInput model."""
+def _parse_portfolio(tool_input: dict) -> tuple[PortfolioInput, str, dict]:
     start, end = _default_dates()
-    return PortfolioInput(
+    portfolio = PortfolioInput(
         assets=[
             AssetInput(
                 ticker=a["ticker"],
@@ -106,15 +176,25 @@ def parse_portfolio_from_tool(tool_input: dict) -> PortfolioInput:
         rebalance_frequency=tool_input.get("rebalance_frequency", "quarterly"),
         benchmark=tool_input.get("benchmark", "SPY"),
         strategy=tool_input.get("strategy", "custom"),
-    ), tool_input.get("strategy_summary", "")
+    )
+    summary = tool_input.get("strategy_summary", "")
+    display_config = tool_input.get("display_config", {})
+    return portfolio, summary, display_config
 
 
-def call_ai(request: ChatRequest) -> tuple[PortfolioInput, str, str]:
+def _extract_text(content: list) -> str:
+    return " ".join(b.text for b in content if hasattr(b, "text") and b.text).strip()
+
+
+# ── Main agentic loop ─────────────────────────────────────────────────────────
+
+def call_ai(request: ChatRequest) -> tuple[PortfolioInput, str, str, dict]:
     """
-    Call Claude with tool use to construct a portfolio from natural language.
+    Agentic loop: Claude can call get_asset_statistics as many times as needed
+    before making the final construct_portfolio call.
 
     Returns:
-        (portfolio_input, ai_response_text, strategy_summary)
+        (portfolio_input, ai_response_text, strategy_summary, display_config)
     """
     messages = [
         {"role": m.role, "content": m.content}
@@ -122,65 +202,75 @@ def call_ai(request: ChatRequest) -> tuple[PortfolioInput, str, str]:
     ]
     messages.append({"role": "user", "content": request.message})
 
-    # Enable prompt caching for the system prompt
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=4096,
-        system=[
-            {
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        tools=[PORTFOLIO_TOOL],
-        tool_choice={"type": "auto"},
-        messages=messages,
-    )
+    tools = [GET_ASSET_STATISTICS_TOOL, PORTFOLIO_TOOL]
+    system = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
-    # Extract tool call
-    tool_input = None
-    text_blocks = []
+    portfolio_input = None
+    strategy_summary = ""
+    display_config = {}
 
-    for block in response.content:
-        if block.type == "tool_use" and block.name == "construct_portfolio":
-            tool_input = block.input
-        elif block.type == "text":
-            text_blocks.append(block.text)
-
-    if tool_input is None:
-        raise ValueError("AI did not call construct_portfolio tool. Response: " + " ".join(text_blocks))
-
-    portfolio_input, strategy_summary = parse_portfolio_from_tool(tool_input)
-
-    # Get the follow-up text response (after tool use)
-    # If Claude stopped before giving a text response, make a follow-up call
-    ai_text = " ".join(text_blocks).strip()
-    if not ai_text:
-        # Send tool result back to get the final text
-        follow_up_messages = messages + [
-            {"role": "assistant", "content": response.content},
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": next(
-                            b.id for b in response.content if hasattr(b, "type") and b.type == "tool_use"
-                        ),
-                        "content": "Portfolio constructed successfully. Please provide your analysis.",
-                    }
-                ],
-            },
-        ]
-        follow_up = client.messages.create(
+    for iteration in range(MAX_RESEARCH_ITERATIONS):
+        response = client.messages.create(
             model=MODEL,
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            messages=follow_up_messages,
+            max_tokens=4096,
+            system=system,
+            tools=tools,
+            tool_choice={"type": "auto"},
+            messages=messages,
         )
-        ai_text = " ".join(
-            b.text for b in follow_up.content if hasattr(b, "text")
-        ).strip()
 
-    return portfolio_input, ai_text, strategy_summary
+        # Append Claude's response to message history
+        messages.append({"role": "assistant", "content": response.content})
+
+        tool_calls = [b for b in response.content if b.type == "tool_use"]
+
+        # No tool calls → Claude gave a pure text response (shouldn't happen often)
+        if not tool_calls:
+            break
+
+        tool_results = []
+        construct_called = False
+
+        for tc in tool_calls:
+            if tc.name == "get_asset_statistics":
+                # Execute the research tool with real market data
+                inp = tc.input
+                stats = get_asset_statistics_for_ai(
+                    tickers=inp["tickers"],
+                    start_date=inp["start_date"],
+                    end_date=inp["end_date"],
+                    benchmark=inp.get("benchmark", "SPY"),
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc.id,
+                    "content": json.dumps(stats, default=str),
+                })
+
+            elif tc.name == "construct_portfolio":
+                portfolio_input, strategy_summary, display_config = _parse_portfolio(tc.input)
+                construct_called = True
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc.id,
+                    "content": "Portfolio finalised. Backtest is running.",
+                })
+
+        # Send tool results back
+        messages.append({"role": "user", "content": tool_results})
+
+        if construct_called:
+            # Get Claude's final narrative response
+            final = client.messages.create(
+                model=MODEL,
+                max_tokens=1024,
+                system=SYSTEM_PROMPT,
+                messages=messages,
+            )
+            ai_text = _extract_text(final.content)
+            return portfolio_input, ai_text, strategy_summary, display_config
+
+    if portfolio_input is None:
+        raise ValueError("AI did not construct a portfolio. Please rephrase your request.")
+
+    return portfolio_input, "", strategy_summary, display_config

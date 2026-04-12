@@ -14,6 +14,8 @@ def calculate_metrics(
     rfr_daily = (1 + risk_free_rate) ** (1 / ann) - 1
 
     # --- Portfolio curve ---
+    if portfolio_returns.empty:
+        raise ValueError("Portfolio returns series is empty — no tradeable date range found for these assets.")
     cum = (1 + portfolio_returns).cumprod()
     total_return = cum.iloc[-1] - 1
     n_days = len(portfolio_returns)
