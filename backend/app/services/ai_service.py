@@ -36,19 +36,54 @@ For simple explicit portfolios ("60% SPY 40% BND"), you may skip research and go
 - Default date range: last 10 years if not specified
 - Default rebalance: quarterly
 - Default benchmark: SPY
-- State your assumptions clearly in the narrative
+
+## Backtest Integrity — Bailey & Lopez de Prado Guidelines
+The results include a **Deflated Sharpe Ratio (DSR)** which corrects for overfitting, non-normality, and finite sample bias. Always flag these risks in your narrative:
+
+**Overfitting warnings** (flag if any apply):
+- Short backtest period (<3 years): high chance the Sharpe is spurious
+- DSR < 0.90: performance likely reflects data-mining rather than edge
+- DSR 0.90–0.95: moderate confidence; interpret with caution
+- DSR > 0.95: stronger statistical evidence of genuine alpha
+- Strategies with many parameters (momentum windows, thresholds) have higher overfitting risk
+- In-sample optimisation (e.g. max Sharpe) inflates Sharpe — out-of-sample results will be lower
+
+**Best practices to mention when relevant:**
+- Sharpe alone is insufficient — also check DSR, Sortino (penalises downside more), and Calmar (CAGR vs max DD)
+- High up-capture with low down-capture is more valuable than raw Sharpe
+- Regime sensitivity: strong backtests over a single bull market may fail in different regimes
+- Transaction costs and slippage are not modelled — reduce expected returns accordingly for high-turnover strategies
+- Benchmark-relative metrics (Alpha, Info Ratio, tracking error) matter more than absolute returns for fund mandates
+
+## Output Format
+Write the narrative as **tight bullet points** under short ## headers. Maximum 5 bullets per section. No filler sentences.
+
+Example structure:
+```
+## What Was Built
+- 60% VTI (US equity) + 40% BND (investment-grade bonds), quarterly rebalance
+- Benchmark: SPY; 10-year window Jan 2015–Jan 2025
+
+## Key Findings
+- CAGR 7.2% vs SPY 13.1% — bonds drag equity returns but reduce vol by 38%
+- Sharpe 0.61 / DSR 0.94 — statistically credible, not overfitted
+- Max drawdown −18% vs SPY −24% — meaningful downside protection
+
+## Risks & Caveats
+- Rate-rise environment (2022) hit both stocks and bonds simultaneously — 60/40 diversification can fail
+- No leverage or alternatives — limited upside in risk-on regimes
+```
 
 ## Display Config
 In construct_portfolio, set display_config thoughtfully:
-- **sections**: pick what's most relevant. Options: equity_curve, drawdown, metrics_summary, full_metrics, monthly_heatmap, correlation_matrix, rolling_metrics, weight_drift
-  - Always include: equity_curve, drawdown, metrics_summary
-  - Add weight_drift when ≥2 assets — it shows how holdings drift and snap back at rebalances
-  - Add correlation_matrix when ≥3 assets and diversification is the goal
-  - Add rolling_metrics when consistency/risk over time matters
-  - Add monthly_heatmap for multi-year strategies
-  - Add full_metrics when benchmark comparison is the focus
+- **sections**: Always include equity_curve, drawdown, metrics_summary. Also add:
+  - weight_drift when ≥2 assets
+  - correlation_matrix when ≥3 assets and diversification is the goal
+  - rolling_metrics when consistency/risk over time matters
+  - monthly_heatmap for multi-year strategies
+  - full_metrics when benchmark comparison is the focus
 - **featured_metrics**: 3–5 metric keys most relevant to this strategy
-- **narrative**: Write clear markdown analysis — explain what you built, your research findings, key risks, and what the user should focus on in the results. Use ## headers to structure it."""
+- **narrative**: Bullet-point markdown per the Output Format above"""
 
 # ── Tool definitions ─────────────────────────────────────────────────────────
 
@@ -264,7 +299,7 @@ def call_ai(request: ChatRequest) -> tuple[PortfolioInput, str, str, dict]:
             final = client.messages.create(
                 model=MODEL,
                 max_tokens=1024,
-                system=SYSTEM_PROMPT,
+                system=system,
                 messages=messages,
             )
             ai_text = _extract_text(final.content)

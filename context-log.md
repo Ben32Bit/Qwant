@@ -4,6 +4,26 @@ This file tracks all changes, decisions, and project state. Updated by Claude Co
 
 ---
 
+## 2026-04-12 — Bailey Papers + Concise AI Output
+
+**What:** Integrated "Deflated Sharpe Ratio" and "Probability of Backtest Overfitting" best practices from Bailey & Lopez de Prado into the backtesting and AI narrative layers. Also tightened AI output to concise bullet points.
+
+**Files affected:**
+- `backend/app/services/metrics.py` — Added `_deflated_sharpe_ratio()` helper using the DSR formula from the Bailey paper (non-normality correction via skewness + excess kurtosis, Euler-Mascheroni approximation for max expected SR). Also added `skewness` and `excess_kurtosis` to metric output.
+- `backend/app/models/backtest_result.py` — Added `skewness`, `excess_kurtosis`, `deflated_sharpe` Optional[float] fields to `PortfolioMetrics`.
+- `backend/app/services/ai_service.py` — Updated SYSTEM_PROMPT with a "Backtest Integrity" section (DSR thresholds: >0.95 good, 0.90–0.95 moderate, <0.90 overfit warning; overfitting risk factors; best practices to cite). Also replaced verbose narrative instructions with strict bullet-point output format. Fixed final narrative call to use cached `system` list instead of plain string.
+- `frontend/src/components/Dashboard/MetricsCards.jsx` — Added DSR row (colour-coded green/yellow/red) and skewness/kurtosis rows under Risk-Adjusted section.
+- `frontend/src/styles/globals.css` — Added `.warning { color: var(--accent-yellow); }` class for DSR moderate range.
+
+**Decisions:**
+- DSR uses `n_trials=1` (single strategy per request). DSR then measures significance of SR > 0 under non-normality. A more aggressive N (e.g. 50) would penalise strategies harder — deferred until user asks.
+- Bailey PBO (CSCV algorithm) not implemented as it requires multiple strategy variants. Referenced in AI best practices text instead.
+- DSR thresholds: ≥0.95 = "low overfit risk" (green), 0.90–0.95 = "moderate risk" (yellow), <0.90 = "possible overfit" (red).
+
+**State:** Backend computes DSR on every backtest. AI narrative now uses bullet-point format with DSR-aware overfitting warnings. Frontend displays DSR with colour coding.
+
+---
+
 ## 2026-04-12 — Project Initialization
 
 **What:** Created `PROJECT-REFERENCE.md` — the master reference document for the entire project.
@@ -181,4 +201,4 @@ npm run dev
 - [ ] Editable portfolio weights table
 - [ ] Rate limiting
 - [ ] Mobile layout
-nnnn- rontend/src/utils/exportExcel.js (new) � SheetJS workbook builder with 6 sheets (Summary, Performance, Holdings, Monthly Returns, Rolling Metrics, Correlations)nn- Client-side export via SheetJS XLSX.writeFile (no server round-trip)n- All pct values stored as actual numbers (e.g. 12.34 not 0.1234)n**Pending:**n- [ ] Editable portfolio weights tablen- [ ] Mobile layout
+nnnn- rontend/src/utils/exportExcel.js (new) � SheetJS workbook builder with 6 sheets (Summary, Performance, Holdings, Monthly Returns, Rolling Metrics, Correlations)nn- Client-side export via SheetJS XLSX.writeFile (no server round-trip)n- All pct values stored as actual numbers (e.g. 12.34 not 0.1234)n**Pending:**n- [ ] Editable portfolio weights tablen- [ ] Mobile layout

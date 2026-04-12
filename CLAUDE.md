@@ -239,28 +239,41 @@ scipy              # for optimization (minimize)
 python-dotenv
 ```
 
-### 3.4 AI Layer — Anthropic Tool Use
+### 3.4 AI Layer — Agentic Tool Use Loop
 
-**Model:** `claude-sonnet-4-20250514` (fast, cheap, excellent at tool use)
+**Model:** `claude-sonnet-4-20250514`
 
-**System prompt for the AI service:**
+**Architecture:** Multi-step agentic loop. Claude can call `get_asset_statistics` as many times as needed (up to 5 iterations) before making the final `construct_portfolio` call. This gives the AI a "sandbox" to look at real market data before deciding on weights.
+
+**Tools:**
+
+1. **`get_asset_statistics(tickers, start_date, end_date, benchmark)`** — Research tool.
+   Returns per-ticker: annual return, volatility, Sharpe ratio, max drawdown, correlation to benchmark.
+   Also returns the full pairwise correlation matrix.
+   Claude calls this first for data-driven strategies ("most uncorrelated", "best Sharpe", etc.)
+
+2. **`construct_portfolio(assets, start_date, end_date, ..., display_config)`** — Finalisation tool.
+   Called once when Claude has enough data to commit to a portfolio.
+   Includes a `display_config` block that controls what the UI renders.
+
+**`display_config` schema:**
+```json
+{
+  "sections": ["equity_curve", "drawdown", "metrics_summary", "weight_drift", "correlation_matrix", "rolling_metrics", "monthly_heatmap", "full_metrics"],
+  "featured_metrics": ["cagr", "sharpe", "max_drawdown", "beta"],
+  "narrative": "## Strategy Analysis\n\nMarkdown text Claude writes to explain methodology and findings."
+}
 ```
-You are a portfolio construction assistant. The user will describe a portfolio
-or investment strategy in natural language. Your job is to interpret their
-intent and call the construct_portfolio tool with concrete, investable
-parameters.
+The frontend renders only the sections Claude selects, in the order specified.
 
-Rules:
-- Use real, currently tradable ticker symbols (US-listed ETFs and stocks)
-- Weights can be negative (short positions) and can sum to >1.0 (leverage)
-- Default date range: last 10 years to today if not specified
-- Default rebalancing: quarterly if not specified
-- Default benchmark: SPY if not specified
-- If the user asks for a strategy (min variance, max sharpe, risk parity),
-  set the "strategy" field and provide candidate tickers. The backend will
-  compute optimal weights.
-- Always include a brief rationale for each holding
-- If the request is ambiguous, make reasonable assumptions and state them
+**Flow:**
+```
+User message
+  → Claude calls get_asset_statistics (may repeat)
+  → Claude analyses real data
+  → Claude calls construct_portfolio with informed weights + display_config
+  → Backend runs backtest
+  → Frontend renders AI-chosen layout
 ```
 
 **Tool definition:**

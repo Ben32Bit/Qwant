@@ -39,6 +39,14 @@ class PortfolioMetrics(BaseModel):
     sortino: float
     calmar: float
 
+    # Return distribution shape
+    skewness: Optional[float] = None
+    excess_kurtosis: Optional[float] = None
+
+    # Deflated Sharpe Ratio (Bailey & Lopez de Prado, 2014)
+    # Probability in [0,1] that positive Sharpe is not due to overfitting/chance
+    deflated_sharpe: Optional[float] = None
+
     # Benchmark-relative (optional — null if no benchmark)
     beta: Optional[float] = None
     alpha: Optional[float] = None

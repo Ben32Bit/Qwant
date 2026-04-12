@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from typing import Optional
+from scipy.stats import norm as scipy_norm, skew as scipy_skew, kurtosis as scipy_kurtosis
 from app.utils.constants import TRADING_DAYS_PER_YEAR
 
 
@@ -48,6 +49,13 @@ def calculate_metrics(
     var_95 = float(np.percentile(portfolio_returns, 5)) * np.sqrt(ann)
     cvar_95 = float(portfolio_returns[portfolio_returns <= np.percentile(portfolio_returns, 5)].mean()) * np.sqrt(ann)
 
+    # Skewness & excess kurtosis (for DSR)
+    skewness = float(scipy_skew(portfolio_returns))
+    excess_kurtosis = float(scipy_kurtosis(portfolio_returns))  # Fisher definition
+
+    # Deflated Sharpe Ratio (Bailey & Lopez de Prado, 2014)
+    deflated_sharpe = _deflated_sharpe_ratio(portfolio_returns, n_trials=1)
+
     # Best / worst year and month
     monthly = _resample_returns(portfolio_returns, "ME")
     yearly = _resample_returns(portfolio_returns, "YE")
@@ -69,6 +77,9 @@ def calculate_metrics(
         "downside_deviation": round(downside_dev, 6),
         "var_95": round(var_95, 6),
         "cvar_95": round(cvar_95, 6),
+        "skewness": round(skewness, 4),
+        "excess_kurtosis": round(excess_kurtosis, 4),
+        "deflated_sharpe": deflated_sharpe,
         "best_year": best_year,
         "worst_year": worst_year,
         "best_month": best_month,
@@ -126,6 +137,53 @@ def build_monthly_returns_grid(portfolio_returns: pd.Series) -> dict:
 
 
 # --- Helpers ---
+
+def _deflated_sharpe_ratio(returns: pd.Series, n_trials: int = 1) -> Optional[float]:
+    """
+    Deflated Sharpe Ratio (Bailey & Lopez de Prado, 2014).
+
+    Corrects the observed Sharpe for:
+      1. Non-normality (skewness and excess kurtosis of returns)
+      2. Multiple testing bias (n_trials independent strategies evaluated)
+      3. Finite sample length
+
+    Returns a probability in [0, 1]:
+      - DSR > 0.95 → strong signal (green)
+      - DSR 0.90-0.95 → moderate (yellow)
+      - DSR < 0.90 → possibly overfitted (red)
+
+    Reference: https://www.davidhbailey.com/dhbpapers/deflated-sharpe.pdf
+    """
+    T = len(returns)
+    if T < 30:
+        return None
+
+    sr_daily = returns.mean() / returns.std() if returns.std() > 0 else 0.0
+    skewness = float(scipy_skew(returns))
+    excess_kurtosis = float(scipy_kurtosis(returns))  # Fisher definition (excess)
+
+    # Expected maximum SR from N independent trials (Euler-Mascheroni approximation)
+    # When n_trials=1, sr_star=0: DSR collapses to significance test of SR > 0
+    gamma_em = 0.5772156649  # Euler-Mascheroni constant
+    if n_trials > 1:
+        sr_star = (
+            (1 - gamma_em) * scipy_norm.ppf(1 - 1 / n_trials)
+            + gamma_em * scipy_norm.ppf(1 - 1 / (n_trials * np.e))
+        )
+    else:
+        sr_star = 0.0
+
+    # Variance of SR estimator adjusted for non-normality
+    variance_sr = (
+        1 - skewness * sr_daily + (excess_kurtosis / 4 + 1 / 4) * sr_daily ** 2
+    ) / max(T - 1, 1)
+
+    if variance_sr <= 0:
+        return round(float(scipy_norm.cdf(sr_daily - sr_star)), 4)
+
+    dsr = scipy_norm.cdf((sr_daily - sr_star) / np.sqrt(variance_sr))
+    return round(float(dsr), 4)
+
 
 def _resample_returns(returns: pd.Series, freq: str) -> pd.Series:
     """Resample daily returns to period returns."""

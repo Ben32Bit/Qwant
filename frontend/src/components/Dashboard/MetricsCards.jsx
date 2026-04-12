@@ -34,6 +34,22 @@ function SkeletonRows({ n }) {
   ))
 }
 
+// ── DSR colour ────────────────────────────────────────────────────────────────
+function dsrClass(dsr) {
+  if (dsr == null) return ''
+  if (dsr >= 0.95) return 'positive'
+  if (dsr >= 0.90) return 'warning'
+  return 'negative'
+}
+
+function dsrLabel(dsr) {
+  if (dsr == null) return '—'
+  const pct = (dsr * 100).toFixed(1) + '%'
+  if (dsr >= 0.95) return pct
+  if (dsr >= 0.90) return pct
+  return pct
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 export default function MetricsCards({ metrics, loading }) {
   if (loading) {
@@ -79,6 +95,20 @@ export default function MetricsCards({ metrics, loading }) {
           <Row label="Sharpe"   value={fmtRatio(m.sharpe)}  valueClass={colorClass(m.sharpe)} />
           <Row label="Sortino"  value={fmtRatio(m.sortino)} valueClass={colorClass(m.sortino)} />
           <Row label="Calmar"   value={fmtRatio(m.calmar)}  valueClass={colorClass(m.calmar)} />
+          {m.deflated_sharpe != null && (
+            <Row
+              label="Deflated Sharpe"
+              value={dsrLabel(m.deflated_sharpe)}
+              valueClass={dsrClass(m.deflated_sharpe)}
+              sub={m.deflated_sharpe >= 0.95 ? 'low overfit risk' : m.deflated_sharpe >= 0.90 ? 'moderate risk' : 'possible overfit'}
+            />
+          )}
+          {m.skewness != null && (
+            <Row label="Skewness" value={fmtRatio(m.skewness)} valueClass={m.skewness >= 0 ? 'positive' : 'negative'} />
+          )}
+          {m.excess_kurtosis != null && (
+            <Row label="Excess Kurtosis" value={fmtRatio(m.excess_kurtosis)} />
+          )}
 
           {hasBenchmark && (
             <>

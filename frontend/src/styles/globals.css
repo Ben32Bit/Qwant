@@ -66,6 +66,7 @@ body {
 .positive { color: var(--accent-green); }
 .negative { color: var(--accent-red); }
 .neutral  { color: var(--text-secondary); }
+.warning  { color: var(--accent-yellow); }
 
 /* Skeleton animation */
 @keyframes shimmer {
