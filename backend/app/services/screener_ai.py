@@ -153,7 +153,7 @@ def call_screener_ai(
         max_tokens=1024,
         system=system,
         tools=[RUN_SCREEN_TOOL],
-        tool_choice={"type": "required"},
+        tool_choice={"type": "any"},   # must call a tool; "required" is not a valid value
         messages=messages,
     )
 
