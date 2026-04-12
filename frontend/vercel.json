@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://affectionate-essence.up.railway.app/api/:path*"
+      "destination": "https://qwant-production.up.railway.app/api/:path*"
     },
     {
       "source": "/(.*)",
