@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-04-14 — Fix event-loop blocking causing "Request failed" on production
+
+**What:** All API routes (`/api/unified/chat`, `/api/screen/*`, `/api/backtest`) were calling blocking synchronous functions (Anthropic SDK, yfinance, pandas) directly from async FastAPI handlers. This blocks uvicorn's event loop for the full duration of the request (8–15s per request). Under load or on cold start, Railway's proxy hits its timeout and returns a non-JSON HTML error page. The frontend's `res.json()` then throws, falling back to the "Request failed" message.
+
+**Fix:** Wrapped all blocking work in `asyncio.to_thread()` in each router. Added proper `try/except` with `HTTPException` and `logger.exception` logging to every endpoint so errors return readable JSON instead of crashing silently.
+
+**Files modified:**
+- `backend/app/routers/unified.py` — added `asyncio.to_thread` + try/except
+- `backend/app/routers/screen.py` — added `asyncio.to_thread` + try/except to all 3 endpoints
+- `backend/app/routers/backtest.py` — extracted `_work()` closure, runs via `asyncio.to_thread`
+
+---
+
 ## 2026-04-14 — Drawdown tooltip bug fix + FF5 in screener rotation panel
 
 **What:** Two fixes.

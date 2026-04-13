@@ -1,7 +1,8 @@
-from fastapi import APIRouter
+import asyncio
+import logging
+from fastapi import APIRouter, HTTPException
 from app.models.chat import ChatRequest
 from app.services.unified_ai import call_unified_ai
-import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -18,8 +19,19 @@ async def unified_chat(chat_request: ChatRequest):
         type = "screener"      → screen_result + ai_response
         type = "clarification" → ai_response only (Claude asked a clarifying question)
     """
-    result = call_unified_ai(
-        message=chat_request.message,
-        conversation_history=chat_request.conversation_history,
-    )
-    return result
+    try:
+        # call_unified_ai is synchronous (blocking Anthropic + yfinance calls).
+        # Run it in a thread pool so it doesn't stall the async event loop,
+        # which would cause Railway's proxy to return a non-JSON 502/504.
+        result = await asyncio.to_thread(
+            call_unified_ai,
+            chat_request.message,
+            chat_request.conversation_history,
+        )
+        return result
+    except ValueError as exc:
+        logger.warning("Unified chat value error: %s", exc)
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Unified chat unexpected error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Internal error: {exc}")

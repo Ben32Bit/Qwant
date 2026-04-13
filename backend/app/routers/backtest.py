@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from fastapi import APIRouter, HTTPException, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -8,19 +10,15 @@ from app.services.data_service import fetch_prices
 from app.services.optimization import apply_strategy
 import os
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 RISK_FREE_RATE = float(os.getenv("RISK_FREE_RATE", "0.05"))
 
 
-@router.post("/backtest", response_model=BacktestResult)
-@limiter.limit("60/hour")
-async def run_backtest(request: Request, portfolio: PortfolioInput) -> BacktestResult:
-    """
-    Direct backtest endpoint — bypasses AI.
-    Used for manual portfolio builder in the UI.
-    """
-    try:
+async def _run(portfolio: PortfolioInput) -> BacktestResult:
+    """Apply strategy (if needed) then run backtest — all blocking I/O in a thread."""
+    def _work():
         if portfolio.strategy != "custom":
             tickers = [a.ticker for a in portfolio.assets]
             prices = fetch_prices(
@@ -35,10 +33,23 @@ async def run_backtest(request: Request, portfolio: PortfolioInput) -> BacktestR
             for asset in portfolio.assets:
                 if asset.ticker in optimized:
                     asset.weight = float(optimized[asset.ticker])
+        return run_full_backtest(portfolio)
 
-        result = run_full_backtest(portfolio)
-        return result
+    return await asyncio.to_thread(_work)
+
+
+@router.post("/backtest", response_model=BacktestResult)
+@limiter.limit("60/hour")
+async def run_backtest(request: Request, portfolio: PortfolioInput) -> BacktestResult:
+    """
+    Direct backtest endpoint — bypasses AI.
+    Used for manual portfolio builder in the UI.
+    """
+    try:
+        return await _run(portfolio)
     except ValueError as e:
+        logger.warning("Backtest value error: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.exception("Backtest unexpected error: %s", e)
         raise HTTPException(status_code=500, detail=f"Backtest failed: {str(e)}")
