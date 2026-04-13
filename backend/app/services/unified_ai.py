@@ -11,7 +11,7 @@ from app.services.backtest_engine import run_full_backtest
 from app.services.optimization import apply_strategy
 from app.services.data_service import fetch_prices
 
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=4)
 
 MODEL = "claude-sonnet-4-20250514"
 

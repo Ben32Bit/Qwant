@@ -147,8 +147,14 @@ export default function UnifiedChatPanel({ onResult, loading, setLoading }) {
       })
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: 'Request failed' }))
-        setMessages(prev => [...prev, { role: 'assistant', content: err.detail || 'Error.', isError: true }])
+        const err = await res.json().catch(() => ({ detail: null }))
+        const isOverload = res.status === 503 || res.status === 529
+        const isRateLimit = res.status === 429
+        const msg = err.detail
+          || (isOverload ? 'The AI is temporarily overloaded — please try again in a few seconds.' : null)
+          || (isRateLimit ? 'Rate limit reached — please wait a moment before trying again.' : null)
+          || 'Request failed — please try again.'
+        setMessages(prev => [...prev, { role: 'assistant', content: msg, isError: true }])
         setLoading(false)
         return
       }

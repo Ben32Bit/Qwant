@@ -3,7 +3,7 @@ import os
 from datetime import date
 from app.models.screener import ScreenRequest, ScreenerResult
 
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=4)
 
 MODEL = "claude-sonnet-4-20250514"
 

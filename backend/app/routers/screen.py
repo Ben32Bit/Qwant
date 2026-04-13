@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import anthropic
 from fastapi import APIRouter, HTTPException, Request
 from app.models.screener import ScreenRequest, RotationBacktestRequest
 from app.models.chat import ChatRequest
@@ -27,6 +28,14 @@ async def screen_chat(chat_request: ChatRequest):
             "screen_result": screen_result.model_dump(),
             "ai_response": ai_text,
         }
+    except anthropic.APIStatusError as exc:
+        if exc.status_code == 529 or "overloaded" in str(exc).lower():
+            logger.warning("Anthropic API overloaded (screen): %s", exc)
+            raise HTTPException(status_code=503, detail="Anthropic is temporarily overloaded — please try again in a few seconds.")
+        if exc.status_code == 429:
+            raise HTTPException(status_code=429, detail="Rate limit reached — please wait a moment and try again.")
+        logger.exception("Anthropic API error (screen): %s", exc)
+        raise HTTPException(status_code=502, detail=f"AI service error: {exc.message}")
     except ValueError as exc:
         logger.warning("Screen chat value error: %s", exc)
         raise HTTPException(status_code=422, detail=str(exc))
