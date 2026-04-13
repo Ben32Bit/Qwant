@@ -1,7 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react'
-import ChatPanel from '../Chat/ChatPanel.jsx'
+import UnifiedChatPanel from '../Chat/UnifiedChatPanel.jsx'
 import ManualBuilderPanel from '../Chat/ManualBuilderPanel.jsx'
-import StockScreenerPanel from '../Chat/StockScreenerPanel.jsx'
 import ResultsPanel from '../Dashboard/ResultsPanel.jsx'
 import ScreenerResults from '../Dashboard/ScreenerResults.jsx'
 import RotationEquityChart from '../Dashboard/RotationEquityChart.jsx'
@@ -10,9 +9,8 @@ import MetricsCards from '../Dashboard/MetricsCards.jsx'
 
 // ── Tab definitions ───────────────────────────────────────────────────────────
 const TABS = [
-  { id: 'portfolio', label: 'AI Portfolio Builder', accent: 'var(--accent-blue)' },
-  { id: 'screener',  label: 'AI Stock Screener',    accent: 'var(--accent-purple)' },
-  { id: 'manual',    label: 'Manual Build',          accent: 'var(--accent-green)' },
+  { id: 'ai',     label: 'AI Assistant',  accent: 'var(--accent-blue)'  },
+  { id: 'manual', label: 'Manual Build',  accent: 'var(--accent-green)' },
 ]
 
 function Tab({ tab, active, onClick }) {
@@ -37,8 +35,8 @@ function Tab({ tab, active, onClick }) {
   )
 }
 
-// ── Rotation results panel (right side of screener) ───────────────────────────
-function RotationPanel({ backtest, loading, screenResult, topNHeld, onPortToManual }) {
+// ── Inline rotation results panel ─────────────────────────────────────────────
+function RotationPanel({ backtest, loading, topNHeld, onPortToManual }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -53,13 +51,9 @@ function RotationPanel({ backtest, loading, screenResult, topNHeld, onPortToManu
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-4 space-y-4 fade-in">
-
-        {/* Header + Port button */}
         <div className="flex items-center justify-between">
           <div>
-            <div className="mono font-bold text-sm" style={{ color: 'var(--accent-purple)' }}>
-              ◈ ROTATION BACKTEST
-            </div>
+            <div className="mono font-bold text-sm" style={{ color: 'var(--accent-purple)' }}>◈ ROTATION BACKTEST</div>
             <div className="mono text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>
               Top {topNHeld} · no-lookahead · each window uses previous winner
             </div>
@@ -67,12 +61,7 @@ function RotationPanel({ backtest, loading, screenResult, topNHeld, onPortToManu
           <button
             onClick={onPortToManual}
             className="mono text-xs px-3 py-2 rounded border transition-colors"
-            style={{
-              borderColor: 'var(--accent-green)',
-              color: 'var(--accent-green)',
-              background: 'transparent',
-              cursor: 'pointer',
-            }}
+            style={{ borderColor: 'var(--accent-green)', color: 'var(--accent-green)', background: 'transparent', cursor: 'pointer' }}
             onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,212,170,0.1)' }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
           >
@@ -83,43 +72,32 @@ function RotationPanel({ backtest, loading, screenResult, topNHeld, onPortToManu
         {/* Featured metrics */}
         <div className="grid grid-cols-4 gap-2">
           {[
-            { label: 'CAGR',     value: backtest.metrics?.cagr,         fmt: v => `${(v*100).toFixed(1)}%`, pos: true },
-            { label: 'Sharpe',   value: backtest.metrics?.sharpe,        fmt: v => v.toFixed(2),              pos: true },
-            { label: 'Max DD',   value: backtest.metrics?.max_drawdown,  fmt: v => `${(v*100).toFixed(1)}%`, pos: false },
-            { label: 'Vol',      value: backtest.metrics?.volatility,    fmt: v => `${(v*100).toFixed(1)}%`, pos: null },
+            { label: 'CAGR',   value: backtest.metrics?.cagr,        fmt: v => `${(v*100).toFixed(1)}%`, pos: true  },
+            { label: 'Sharpe', value: backtest.metrics?.sharpe,       fmt: v => v.toFixed(2),             pos: true  },
+            { label: 'Max DD', value: backtest.metrics?.max_drawdown, fmt: v => `${(v*100).toFixed(1)}%`, pos: false },
+            { label: 'Vol',    value: backtest.metrics?.volatility,   fmt: v => `${(v*100).toFixed(1)}%`, pos: null  },
           ].map(({ label, value, fmt, pos }) => (
-            <div
-              key={label}
-              className="rounded-lg border p-2 text-center"
-              style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}
-            >
+            <div key={label} className="rounded-lg border p-2 text-center"
+              style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
               <div className="text-xs mb-0.5" style={{ color: 'var(--text-secondary)' }}>{label}</div>
-              <div
-                className="mono font-bold text-base"
-                style={{
-                  color: value == null ? 'var(--text-secondary)'
-                    : pos === true  ? (value >= 0 ? 'var(--accent-green)' : 'var(--accent-red)')
-                    : pos === false ? (value <= 0 ? 'var(--accent-green)' : 'var(--accent-red)')
-                    : 'var(--text-primary)',
-                }}
-              >
+              <div className="mono font-bold text-base" style={{
+                color: value == null ? 'var(--text-secondary)'
+                  : pos === true  ? (value >= 0 ? 'var(--accent-green)' : 'var(--accent-red)')
+                  : pos === false ? (value <= 0 ? 'var(--accent-green)' : 'var(--accent-red)')
+                  : 'var(--text-primary)',
+              }}>
                 {value != null ? fmt(value) : '—'}
               </div>
             </div>
           ))}
         </div>
 
-        {/* Rotation equity chart with holding bands */}
         <RotationEquityChart
           equityCurve={backtest.equity_curve}
           benchmarkCurve={backtest.benchmark_curve}
           holdingSchedule={backtest.holding_schedule}
         />
-
-        {/* Drawdown */}
         <DrawdownChart drawdownSeries={backtest.drawdown_series} loading={false} />
-
-        {/* Metrics */}
         <MetricsCards metrics={backtest.metrics} loading={false} />
       </div>
     </div>
@@ -127,48 +105,48 @@ function RotationPanel({ backtest, loading, screenResult, topNHeld, onPortToManu
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
-export default function SplitView({ messages, portfolio, backtest, displayConfig, loading, error, sendMessage, clearChat }) {
-  const [mode, setMode] = useState('portfolio')   // 'portfolio' | 'screener' | 'manual'
+export default function SplitView() {
+  const [mode, setMode] = useState('ai')   // 'ai' | 'manual'
 
-  // Portfolio builder state
-  const [manualBacktest, setManualBacktest]   = useState(null)
+  // ── AI assistant state ────────────────────────────────────────────────────
+  const [aiLoading, setAiLoading] = useState(false)
+  // Last result from /api/unified/chat
+  const [unifiedResult, setUnifiedResult] = useState(null)
+  // Screener sub-state (rotation backtest triggered from ScreenerResults)
+  const [rotationBacktest, setRotationBacktest] = useState(null)
+  const [rotationLoading, setRotationLoading] = useState(false)
+  const [rotationTopN, setRotationTopN] = useState(1)
+
+  // ── Manual build state ────────────────────────────────────────────────────
+  const [manualBacktest, setManualBacktest] = useState(null)
   const [manualPortfolio, setManualPortfolio] = useState(null)
-  const [manualLoading, setManualLoading]     = useState(false)
+  const [manualLoading, setManualLoading] = useState(false)
 
-  // Screener state
-  const [screenResult, setScreenResult]           = useState(null)
-  const [screenerLoading, setScreenerLoading]     = useState(false)
-  const [rotationBacktest, setRotationBacktest]   = useState(null)
-  const [rotationLoading, setRotationLoading]     = useState(false)
-  const [rotationTopN, setRotationTopN]           = useState(1)
+  // ── Import bridges ────────────────────────────────────────────────────────
+  const [screenerImport, setScreenerImport] = useState(null)   // last-window tickers
+  const [rotationImport, setRotationImport] = useState(null)   // full rotation strategy
 
-  // For pre-populating manual build from screener (last-window tickers)
-  const [screenerImport, setScreenerImport] = useState(null)
-  // For porting the full rotation strategy to manual build
-  const [rotationImport, setRotationImport] = useState(null)
+  // Derived from unifiedResult
+  const screenResult = unifiedResult?.type === 'screener' ? unifiedResult.screen_result : null
+  const portfolio    = unifiedResult?.type === 'portfolio' ? unifiedResult.portfolio     : null
+  const backtest     = unifiedResult?.type === 'portfolio' ? unifiedResult.backtest       : null
+  const displayConfig = unifiedResult?.type === 'portfolio' ? unifiedResult.display_config : null
 
-  // Apply data-mode to root so CSS variables switch (screener = purple theme)
+  // Clear rotation backtest whenever a new screen result arrives
   useEffect(() => {
-    const root = document.getElementById('root') || document.body
-    if (mode === 'screener') {
-      root.setAttribute('data-mode', 'screener')
-    } else {
-      root.removeAttribute('data-mode')
-    }
-    return () => root.removeAttribute('data-mode')
-  }, [mode])
+    if (screenResult) setRotationBacktest(null)
+  }, [screenResult])
 
-  const handleManualResult = useCallback((backtestData, portfolioData) => {
-    setManualBacktest(backtestData)
-    setManualPortfolio(portfolioData)
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const handleUnifiedResult = useCallback((data) => {
+    setUnifiedResult(data)
   }, [])
 
-  const handleScreenResult = useCallback((result) => {
-    setScreenResult(result)
-    setRotationBacktest(null)   // clear old rotation backtest when new screen arrives
+  const handleManualResult = useCallback((bt, pf) => {
+    setManualBacktest(bt)
+    setManualPortfolio(pf)
   }, [])
 
-  // Run rotation backtest from screener results
   const handleBacktestRotation = useCallback(async (topNHeld) => {
     if (!screenResult) return
     setRotationTopN(topNHeld)
@@ -185,8 +163,7 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
         }),
       })
       if (!res.ok) throw new Error('Rotation backtest failed')
-      const data = await res.json()
-      setRotationBacktest(data)
+      setRotationBacktest(await res.json())
     } catch (e) {
       console.error(e)
     } finally {
@@ -194,27 +171,21 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
     }
   }, [screenResult])
 
-  // Import screener's last window top assets → manual build (ticker grid only)
+  // Import screener's last window tickers → manual build
   const handleImportToManual = useCallback(() => {
     if (!screenResult?.windows?.length) return
     const lastWindow = screenResult.windows[screenResult.windows.length - 1]
     const topAssets = lastWindow.rankings
       .filter(r => r.rank <= screenResult.top_n)
       .map(r => r.ticker)
-
-    const freqMap = {
-      weekly: 'weekly', monthly: 'monthly',
-      quarterly: 'quarterly', annually: 'annually',
-    }
-    const rebalance = freqMap[screenResult.window_freq] ?? 'quarterly'
-
+    const freqMap = { weekly: 'weekly', monthly: 'monthly', quarterly: 'quarterly', annually: 'annually' }
     setScreenerImport({
       tickers: topAssets,
-      rebalance,
+      rebalance: freqMap[screenResult.window_freq] ?? 'quarterly',
       startDate: screenResult.windows[0]?.window_start,
       endDate: screenResult.windows[screenResult.windows.length - 1]?.window_end,
     })
-    setRotationImport(null)  // clear rotation import when importing by tickers
+    setRotationImport(null)
     setMode('manual')
   }, [screenResult])
 
@@ -226,32 +197,77 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
       topN: rotationTopN,
       holdingSchedule: rotationBacktest.holding_schedule ?? [],
     })
-    setScreenerImport(null)  // clear ticker import
+    setScreenerImport(null)
     setMode('manual')
   }, [screenResult, rotationBacktest, rotationTopN])
 
-  // ── Active right-panel data ───────────────────────────────────────────────
-  const rightPanel = (() => {
-    if (mode === 'screener') {
-      return { type: 'screener' }
-    }
-    if (mode === 'portfolio') {
-      return { type: 'backtest', backtest, portfolio, displayConfig, loading }
-    }
-    // manual
-    return {
-      type: 'backtest',
-      backtest: manualBacktest,
-      portfolio: manualPortfolio,
-      loading: manualLoading,
-      displayConfig: manualBacktest
-        ? {
+  // ── Right panel renderer ──────────────────────────────────────────────────
+  function RightPanel() {
+    if (mode === 'manual') {
+      return (
+        <ResultsPanel
+          backtest={manualBacktest}
+          portfolio={manualPortfolio}
+          loading={manualLoading}
+          displayConfig={manualBacktest ? {
             sections: ['equity_curve', 'drawdown', 'metrics_summary', 'weight_drift', 'monthly_heatmap', 'correlation_matrix'],
             featured_metrics: ['cagr', 'sharpe', 'max_drawdown', 'volatility'],
-          }
-        : null,
+          } : null}
+        />
+      )
     }
-  })()
+
+    // AI mode — screener result
+    if (screenResult || rotationLoading) {
+      return (
+        <div className="flex h-full">
+          {/* Screener rankings */}
+          <div className="flex-1 overflow-hidden border-r" style={{ borderColor: 'var(--border)' }}>
+            <ScreenerResults
+              screenResult={screenResult}
+              onBacktestRotation={handleBacktestRotation}
+              onImportToManual={handleImportToManual}
+              backtestLoading={rotationLoading}
+            />
+          </div>
+          {/* Rotation backtest */}
+          {(rotationBacktest || rotationLoading) && (
+            <div style={{ width: '50%', overflow: 'hidden' }}>
+              <RotationPanel
+                backtest={rotationBacktest}
+                loading={rotationLoading}
+                topNHeld={rotationTopN}
+                onPortToManual={handlePortRotationToManual}
+              />
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    // AI mode — portfolio result
+    if (backtest || aiLoading) {
+      return (
+        <ResultsPanel
+          backtest={backtest}
+          portfolio={portfolio}
+          displayConfig={displayConfig}
+          loading={aiLoading}
+        />
+      )
+    }
+
+    // Empty state
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-center px-8">
+        <div className="mono text-5xl mb-6 opacity-20 select-none" style={{ color: 'var(--accent-blue)' }}>▷</div>
+        <h2 className="mono font-bold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>Results appear here</h2>
+        <p className="text-sm max-w-sm" style={{ color: 'var(--text-secondary)' }}>
+          Ask the AI to build a portfolio or screen assets by performance — results populate here instantly.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full">
@@ -259,44 +275,25 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
       {/* ── Left panel ───────────────────────────────────────────────────── */}
       <div
         className="flex flex-col border-r"
-        style={{
-          width: '40%',
-          minWidth: 320,
-          borderColor: 'var(--border)',
-          background: 'var(--bg-secondary)',
-          transition: 'background 0.25s',
-        }}
+        style={{ width: '40%', minWidth: 320, borderColor: 'var(--border)', background: 'var(--bg-secondary)' }}
       >
         {/* Tab bar */}
         <div
           className="flex border-b px-2 overflow-x-auto"
           style={{ borderColor: 'var(--border)', flexShrink: 0, scrollbarWidth: 'none' }}
         >
-          {TABS.map((tab) => (
-            <Tab
-              key={tab.id}
-              tab={tab}
-              active={mode === tab.id}
-              onClick={() => setMode(tab.id)}
-            />
+          {TABS.map(tab => (
+            <Tab key={tab.id} tab={tab} active={mode === tab.id} onClick={() => setMode(tab.id)} />
           ))}
         </div>
 
-        {/* Panel content */}
+        {/* Panel */}
         <div className="flex-1 min-h-0 overflow-hidden">
-          {mode === 'portfolio' && (
-            <ChatPanel
-              messages={messages}
-              loading={loading}
-              onSend={sendMessage}
-              portfolio={portfolio}
-            />
-          )}
-          {mode === 'screener' && (
-            <StockScreenerPanel
-              onScreenResult={handleScreenResult}
-              loading={screenerLoading}
-              setLoading={setScreenerLoading}
+          {mode === 'ai' && (
+            <UnifiedChatPanel
+              onResult={handleUnifiedResult}
+              loading={aiLoading}
+              setLoading={setAiLoading}
             />
           )}
           {mode === 'manual' && (
@@ -316,51 +313,9 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
       {/* ── Right panel ──────────────────────────────────────────────────── */}
       <div
         className="flex-1 flex flex-col overflow-hidden"
-        style={{ background: 'var(--bg-primary)', transition: 'background 0.25s' }}
+        style={{ background: 'var(--bg-primary)' }}
       >
-        {mode === 'screener' ? (
-          screenResult || rotationLoading ? (
-            <div className="flex h-full">
-              {/* Screener results (left ~50%) */}
-              <div className="flex-1 overflow-hidden border-r" style={{ borderColor: 'var(--border)' }}>
-                <ScreenerResults
-                  screenResult={screenResult}
-                  onBacktestRotation={handleBacktestRotation}
-                  onImportToManual={handleImportToManual}
-                  backtestLoading={rotationLoading}
-                />
-              </div>
-              {/* Rotation backtest results (right ~50%) */}
-              {(rotationBacktest || rotationLoading) && (
-                <div style={{ width: '50%', overflow: 'hidden' }}>
-                  <RotationPanel
-                    backtest={rotationBacktest}
-                    loading={rotationLoading}
-                    screenResult={screenResult}
-                    topNHeld={rotationTopN}
-                    onPortToManual={handlePortRotationToManual}
-                  />
-                </div>
-              )}
-            </div>
-          ) : (
-            // Empty screener state
-            <div className="flex flex-col items-center justify-center h-full text-center px-8">
-              <div className="mono text-5xl mb-6 opacity-20 select-none" style={{ color: 'var(--accent-purple)' }}>◈</div>
-              <h2 className="mono font-bold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>Screener results appear here</h2>
-              <p className="text-sm max-w-sm" style={{ color: 'var(--text-secondary)' }}>
-                Ask which assets performed best in any time window. Results show rank tables and link directly to backtesting.
-              </p>
-            </div>
-          )
-        ) : (
-          <ResultsPanel
-            backtest={rightPanel.backtest}
-            portfolio={rightPanel.portfolio}
-            displayConfig={rightPanel.displayConfig}
-            loading={rightPanel.loading}
-          />
-        )}
+        <RightPanel />
       </div>
     </div>
   )
