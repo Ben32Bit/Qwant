@@ -267,3 +267,58 @@ npm run dev
 - [ ] Return distribution histogram
 - [ ] Rate limiting
 - [ ] Mobile layout
+
+---
+
+## 2026-04-13 — Rotation Equity Chart + Port Rotation to Manual Build
+
+**What:** Two related features: (1) visualise the timeseries of equity positions in the rotation backtest showing when each asset was bought/sold, and (2) allow the rotation strategy to be ported to the Manual Build tab for re-running and comparison.
+
+**New files:**
+- `frontend/src/components/Dashboard/RotationEquityChart.jsx` — custom equity curve for rotation backtests. Uses Recharts `ComposedChart` with:
+  - Coloured `ReferenceArea` bands per window, each colour assigned to the ticker held in that window
+  - Dashed `ReferenceLine` at each rotation event (window boundary)
+  - Custom tooltip showing portfolio value + which ticker was held
+  - Holding strip below chart: scrollable row of window cards showing label + held ticker
+  - Linear/log scale toggle
+  - `HoldingLegend` showing colour-to-ticker mapping
+
+**Backend changes:**
+- `backend/app/models/backtest_result.py` — added `holding_schedule: Optional[list[dict]]` field to `BacktestResult`. Each entry: `{window_start, window_end, label, tickers: [str]}`.
+- `backend/app/services/screener_engine.py` — `run_rotation_backtest()` now builds and returns `holding_schedule`. Correctly handles window 0 (first_tops) and subsequent windows (rotation_map lookup with fallback).
+
+**Frontend changes:**
+- `frontend/src/components/Layout/SplitView.jsx` — major refactor of screener right panel:
+  - Replaced generic `ResultsPanel` for rotation results with a new `RotationPanel` component (defined inline in SplitView)
+  - `RotationPanel` shows: featured metrics strip, `RotationEquityChart`, `DrawdownChart`, `MetricsCards`, and a "→ Port to Manual Build" button
+  - Added `rotationTopN` state to track which top-N was used for the rotation
+  - Added `handlePortRotationToManual` — sets `rotationImport` state and switches to manual tab
+  - Kept `handleImportToManual` for last-window ticker import (now distinct from rotation import)
+
+- `frontend/src/components/Chat/ManualBuilderPanel.jsx`:
+  - Added `rotationImport` prop (separate from `screenerImport`)
+  - `useEffect` auto-imports rotation: pre-populates ticker rows with all unique tickers from the universe at equal weight
+  - Rotation strategy banner: shows screen description, schedule table (window | held tickers), "Run Rotation" button
+  - `runRotation()` calls `/api/screen/backtest` with the stored `screenResult` + `topN`
+  - Results call `onResult()` so they populate the right panel with a rotation-aware strategy summary
+
+- `frontend/src/components/Dashboard/ResultsPanel.jsx`:
+  - Added import of `RotationEquityChart`
+  - In `equity_curve` case: if `backtest.holding_schedule` is present and non-empty, renders `RotationEquityChart` instead of `EquityCurve` — this makes rotation results show the rich holding-band chart automatically in both the screener tab and when re-run from manual build
+
+**Decisions:**
+- Colour assignment is stable per ticker (first appearance order in holdingSchedule → palette index). Same ticker always gets same colour across chart + legend + bands.
+- Port to Manual Build carries: `screenResult` (for re-running), `topN`, `holdingSchedule` (for display). Does NOT carry the computed BacktestResult (result is re-computed fresh on "Run Rotation").
+- The regular ticker-row grid in Manual Build is still shown and pre-populated with the full universe at equal weight — user can modify and run a plain equal-weight backtest for comparison.
+- RotationEquityChart is self-contained (no dependency on ResultsPanel) so it works both in RotationPanel (screener tab) and inside ResultsPanel (manual tab).
+
+**Current state:**
+- Rotation backtest in screener tab: shows RotationEquityChart with coloured holding bands + "Port to Manual Build" button
+- Manual Build tab: supports rotation import mode with schedule table + re-run button + RotationEquityChart in results
+- Both paths produce identical results (same /api/screen/backtest call)
+
+**Pending:**
+- [ ] Verify screener + rotation end-to-end after Railway redeploys
+- [ ] Return distribution histogram
+- [ ] Rate limiting
+- [ ] Mobile layout
