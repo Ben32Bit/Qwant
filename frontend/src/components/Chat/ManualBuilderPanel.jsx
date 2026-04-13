@@ -92,13 +92,14 @@ function WeightBar({ rows }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ManualBuilderPanel({ onResult, loading, setLoading, aiPortfolio, aiBacktest, screenerImport }) {
+export default function ManualBuilderPanel({ onResult, loading, setLoading, aiPortfolio, aiBacktest, screenerImport, rotationImport }) {
   const [rows, setRows] = useState(DEFAULT_ROWS)
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
   const [error, setError] = useState(null)
   const [uploadMsg, setUploadMsg] = useState(null)
   const [importedFrom, setImportedFrom] = useState(null)      // tracks last imported AI portfolio
   const [importedScreener, setImportedScreener] = useState(null) // tracks last imported screener
+  const [importedRotation, setImportedRotation] = useState(null) // tracks last imported rotation
   const fileInputRef = useRef(null)
 
   // ── Auto-import from screener when screenerImport changes ───────────────────
@@ -115,7 +116,33 @@ export default function ManualBuilderPanel({ onResult, loading, setLoading, aiPo
     setError(null)
     setUploadMsg(null)
     setImportedScreener(screenerImport)
+    setImportedRotation(null)
   }, [screenerImport, importedScreener])
+
+  // ── Auto-import rotation strategy ─────────────────────────────────────────
+  useEffect(() => {
+    if (!rotationImport || rotationImport === importedRotation) return
+    // Pre-populate ticker rows with all unique tickers from the rotation universe
+    const allTickers = rotationImport.screenResult?.tickers ?? []
+    if (allTickers.length > 0) {
+      const weight = (1 / allTickers.length).toFixed(4)
+      setRows(allTickers.map(t => ({ ticker: t, weight })))
+    }
+    const sr = rotationImport.screenResult
+    if (sr?.windows?.length) {
+      const freqMap = { weekly: 'weekly', monthly: 'monthly', quarterly: 'quarterly', annually: 'annually' }
+      setSettings(prev => ({
+        startDate: sr.windows[0].window_start,
+        endDate:   sr.windows[sr.windows.length - 1].window_end,
+        rebalance: freqMap[sr.window_freq] ?? prev.rebalance,
+        benchmark: prev.benchmark,
+      }))
+    }
+    setError(null)
+    setUploadMsg(null)
+    setImportedRotation(rotationImport)
+    setImportedScreener(null)
+  }, [rotationImport, importedRotation])
 
   // ── Import from AI portfolio ─────────────────────────────────────────────────
   const loadFromAi = useCallback(() => {
@@ -215,6 +242,39 @@ export default function ManualBuilderPanel({ onResult, loading, setLoading, aiPo
     }
   }, [rows, settings, onResult, setLoading])
 
+  // ── Run rotation backtest (re-runs the rotation strategy from screener) ─────
+  const runRotation = useCallback(async () => {
+    if (!rotationImport?.screenResult) return
+    setError(null)
+    setLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/screen/backtest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          screen_result: rotationImport.screenResult,
+          initial_capital: 10000,
+          benchmark: settings.benchmark,
+          top_n_held: rotationImport.topN,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || 'Rotation backtest failed')
+      onResult(data, {
+        assets: rotationImport.holdingSchedule?.map(h => ({ ticker: h.tickers.join('+'), weight: 1 })) ?? [],
+        strategy_summary: `Rotation: Top ${rotationImport.topN} · ${rotationImport.screenResult?.window_freq} · ${rotationImport.screenResult?.metric_label ?? rotationImport.screenResult?.metric}`,
+        start_date: rotationImport.screenResult?.windows?.[0]?.window_start,
+        end_date:   rotationImport.screenResult?.windows?.at(-1)?.window_end,
+        rebalance_frequency: rotationImport.screenResult?.window_freq,
+        benchmark: settings.benchmark,
+      })
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [rotationImport, settings.benchmark, onResult, setLoading])
+
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -234,6 +294,88 @@ export default function ManualBuilderPanel({ onResult, loading, setLoading, aiPo
             <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>
               ({screenerImport.tickers.join(', ')}) · {screenerImport.rebalance} rebalance
             </span>
+          </div>
+        )}
+
+        {/* Rotation strategy import banner + schedule */}
+        {rotationImport && rotationImport === importedRotation && (
+          <div
+            className="rounded-lg mono text-xs overflow-hidden"
+            style={{ border: '1px solid rgba(168,85,247,0.3)', background: 'rgba(168,85,247,0.05)' }}
+          >
+            {/* Banner */}
+            <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(168,85,247,0.2)' }}>
+              <span style={{ color: 'var(--accent-purple)' }}>
+                ◈ Rotation Strategy&nbsp;
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>
+                  Top {rotationImport.topN} · {rotationImport.screenResult?.window_freq} · {rotationImport.screenResult?.metric_label ?? rotationImport.screenResult?.metric}
+                </span>
+              </span>
+              <button
+                onClick={runRotation}
+                disabled={loading}
+                className="px-3 py-1 rounded font-bold transition-all"
+                style={{
+                  background: loading ? 'var(--border)' : 'var(--accent-purple)',
+                  color: loading ? 'var(--text-secondary)' : '#fff',
+                  border: 'none',
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  fontSize: 11,
+                }}
+              >
+                {loading ? '⟳ Running…' : '▶ Run Rotation'}
+              </button>
+            </div>
+
+            {/* Rotation schedule table */}
+            <div className="overflow-x-auto" style={{ maxHeight: 180 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr>
+                    {['Window', 'Holding'].map(h => (
+                      <th
+                        key={h}
+                        className="px-3 py-1.5 text-left sticky top-0"
+                        style={{
+                          color: 'var(--text-secondary)',
+                          background: 'var(--bg-card)',
+                          borderBottom: '1px solid rgba(168,85,247,0.2)',
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(rotationImport.holdingSchedule ?? []).map((h, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid rgba(168,85,247,0.08)' }}>
+                      <td className="px-3 py-1" style={{ color: 'var(--text-secondary)' }}>{h.label}</td>
+                      <td className="px-3 py-1">
+                        <div className="flex gap-1 flex-wrap">
+                          {h.tickers.map(t => (
+                            <span
+                              key={t}
+                              className="px-1.5 py-0.5 rounded font-bold"
+                              style={{
+                                background: 'rgba(168,85,247,0.15)',
+                                color: 'var(--accent-purple)',
+                              }}
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="px-3 py-1.5 text-xs" style={{ color: 'var(--text-secondary)', borderTop: '1px solid rgba(168,85,247,0.1)' }}>
+              Universe: {rotationImport.screenResult?.tickers?.join(', ')}
+            </div>
           </div>
         )}
 

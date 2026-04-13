@@ -4,6 +4,9 @@ import ManualBuilderPanel from '../Chat/ManualBuilderPanel.jsx'
 import StockScreenerPanel from '../Chat/StockScreenerPanel.jsx'
 import ResultsPanel from '../Dashboard/ResultsPanel.jsx'
 import ScreenerResults from '../Dashboard/ScreenerResults.jsx'
+import RotationEquityChart from '../Dashboard/RotationEquityChart.jsx'
+import DrawdownChart from '../Dashboard/DrawdownChart.jsx'
+import MetricsCards from '../Dashboard/MetricsCards.jsx'
 
 // ── Tab definitions ───────────────────────────────────────────────────────────
 const TABS = [
@@ -34,6 +37,95 @@ function Tab({ tab, active, onClick }) {
   )
 }
 
+// ── Rotation results panel (right side of screener) ───────────────────────────
+function RotationPanel({ backtest, loading, screenResult, topNHeld, onPortToManual }) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <span className="mono text-sm" style={{ color: 'var(--accent-purple)' }}>
+          Running rotation backtest<span className="animate-pulse">…</span>
+        </span>
+      </div>
+    )
+  }
+  if (!backtest) return null
+
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="p-4 space-y-4 fade-in">
+
+        {/* Header + Port button */}
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="mono font-bold text-sm" style={{ color: 'var(--accent-purple)' }}>
+              ◈ ROTATION BACKTEST
+            </div>
+            <div className="mono text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+              Top {topNHeld} · no-lookahead · each window uses previous winner
+            </div>
+          </div>
+          <button
+            onClick={onPortToManual}
+            className="mono text-xs px-3 py-2 rounded border transition-colors"
+            style={{
+              borderColor: 'var(--accent-green)',
+              color: 'var(--accent-green)',
+              background: 'transparent',
+              cursor: 'pointer',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,212,170,0.1)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+          >
+            → Port to Manual Build
+          </button>
+        </div>
+
+        {/* Featured metrics */}
+        <div className="grid grid-cols-4 gap-2">
+          {[
+            { label: 'CAGR',     value: backtest.metrics?.cagr,         fmt: v => `${(v*100).toFixed(1)}%`, pos: true },
+            { label: 'Sharpe',   value: backtest.metrics?.sharpe,        fmt: v => v.toFixed(2),              pos: true },
+            { label: 'Max DD',   value: backtest.metrics?.max_drawdown,  fmt: v => `${(v*100).toFixed(1)}%`, pos: false },
+            { label: 'Vol',      value: backtest.metrics?.volatility,    fmt: v => `${(v*100).toFixed(1)}%`, pos: null },
+          ].map(({ label, value, fmt, pos }) => (
+            <div
+              key={label}
+              className="rounded-lg border p-2 text-center"
+              style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}
+            >
+              <div className="text-xs mb-0.5" style={{ color: 'var(--text-secondary)' }}>{label}</div>
+              <div
+                className="mono font-bold text-base"
+                style={{
+                  color: value == null ? 'var(--text-secondary)'
+                    : pos === true  ? (value >= 0 ? 'var(--accent-green)' : 'var(--accent-red)')
+                    : pos === false ? (value <= 0 ? 'var(--accent-green)' : 'var(--accent-red)')
+                    : 'var(--text-primary)',
+                }}
+              >
+                {value != null ? fmt(value) : '—'}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Rotation equity chart with holding bands */}
+        <RotationEquityChart
+          equityCurve={backtest.equity_curve}
+          benchmarkCurve={backtest.benchmark_curve}
+          holdingSchedule={backtest.holding_schedule}
+        />
+
+        {/* Drawdown */}
+        <DrawdownChart drawdownSeries={backtest.drawdown_series} loading={false} />
+
+        {/* Metrics */}
+        <MetricsCards metrics={backtest.metrics} loading={false} />
+      </div>
+    </div>
+  )
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 export default function SplitView({ messages, portfolio, backtest, displayConfig, loading, error, sendMessage, clearChat }) {
   const [mode, setMode] = useState('portfolio')   // 'portfolio' | 'screener' | 'manual'
@@ -48,9 +140,12 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
   const [screenerLoading, setScreenerLoading]     = useState(false)
   const [rotationBacktest, setRotationBacktest]   = useState(null)
   const [rotationLoading, setRotationLoading]     = useState(false)
+  const [rotationTopN, setRotationTopN]           = useState(1)
 
-  // For pre-populating manual build from screener
+  // For pre-populating manual build from screener (last-window tickers)
   const [screenerImport, setScreenerImport] = useState(null)
+  // For porting the full rotation strategy to manual build
+  const [rotationImport, setRotationImport] = useState(null)
 
   // Apply data-mode to root so CSS variables switch (screener = purple theme)
   useEffect(() => {
@@ -76,6 +171,7 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
   // Run rotation backtest from screener results
   const handleBacktestRotation = useCallback(async (topNHeld) => {
     if (!screenResult) return
+    setRotationTopN(topNHeld)
     setRotationLoading(true)
     try {
       const res = await fetch('/api/screen/backtest', {
@@ -98,7 +194,7 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
     }
   }, [screenResult])
 
-  // Import screener's last window top assets → manual build
+  // Import screener's last window top assets → manual build (ticker grid only)
   const handleImportToManual = useCallback(() => {
     if (!screenResult?.windows?.length) return
     const lastWindow = screenResult.windows[screenResult.windows.length - 1]
@@ -106,7 +202,6 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
       .filter(r => r.rank <= screenResult.top_n)
       .map(r => r.ticker)
 
-    // Map window_freq → rebalance_frequency
     const freqMap = {
       weekly: 'weekly', monthly: 'monthly',
       quarterly: 'quarterly', annually: 'annually',
@@ -119,16 +214,26 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
       startDate: screenResult.windows[0]?.window_start,
       endDate: screenResult.windows[screenResult.windows.length - 1]?.window_end,
     })
+    setRotationImport(null)  // clear rotation import when importing by tickers
     setMode('manual')
   }, [screenResult])
+
+  // Port full rotation strategy → manual build
+  const handlePortRotationToManual = useCallback(() => {
+    if (!screenResult || !rotationBacktest) return
+    setRotationImport({
+      screenResult,
+      topN: rotationTopN,
+      holdingSchedule: rotationBacktest.holding_schedule ?? [],
+    })
+    setScreenerImport(null)  // clear ticker import
+    setMode('manual')
+  }, [screenResult, rotationBacktest, rotationTopN])
 
   // ── Active right-panel data ───────────────────────────────────────────────
   const rightPanel = (() => {
     if (mode === 'screener') {
       return { type: 'screener' }
-    }
-    if (mode === 'ai') {
-      return { type: 'backtest', backtest, portfolio, displayConfig, loading }
     }
     if (mode === 'portfolio') {
       return { type: 'backtest', backtest, portfolio, displayConfig, loading }
@@ -202,6 +307,7 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
               aiPortfolio={portfolio}
               aiBacktest={backtest}
               screenerImport={screenerImport}
+              rotationImport={rotationImport}
             />
           )}
         </div>
@@ -215,7 +321,7 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
         {mode === 'screener' ? (
           screenResult || rotationLoading ? (
             <div className="flex h-full">
-              {/* Screener results (left 55%) */}
+              {/* Screener results (left ~50%) */}
               <div className="flex-1 overflow-hidden border-r" style={{ borderColor: 'var(--border)' }}>
                 <ScreenerResults
                   screenResult={screenResult}
@@ -224,17 +330,15 @@ export default function SplitView({ messages, portfolio, backtest, displayConfig
                   backtestLoading={rotationLoading}
                 />
               </div>
-              {/* Rotation backtest results (right 45%) */}
+              {/* Rotation backtest results (right ~50%) */}
               {(rotationBacktest || rotationLoading) && (
-                <div style={{ width: '45%', overflow: 'hidden' }}>
-                  <ResultsPanel
+                <div style={{ width: '50%', overflow: 'hidden' }}>
+                  <RotationPanel
                     backtest={rotationBacktest}
-                    portfolio={null}
-                    displayConfig={rotationBacktest ? {
-                      sections: ['equity_curve', 'drawdown', 'metrics_summary', 'monthly_heatmap'],
-                      featured_metrics: ['cagr', 'sharpe', 'max_drawdown', 'volatility'],
-                    } : null}
                     loading={rotationLoading}
+                    screenResult={screenResult}
+                    topNHeld={rotationTopN}
+                    onPortToManual={handlePortRotationToManual}
                   />
                 </div>
               )}

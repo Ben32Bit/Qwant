@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react'
 import EquityCurve from './EquityCurve.jsx'
+import RotationEquityChart from './RotationEquityChart.jsx'
 import DrawdownChart from './DrawdownChart.jsx'
 import MetricsCards from './MetricsCards.jsx'
 import MonthlyHeatmap from './MonthlyHeatmap.jsx'
@@ -139,7 +140,14 @@ export default function ResultsPanel({ backtest, portfolio, displayConfig, loadi
         {sections.map(section => {
           switch (section) {
             case 'equity_curve':
-              return (
+              // Use rotation chart when holding_schedule is present (rotation backtest)
+              return backtest?.holding_schedule?.length ? (
+                <RotationEquityChart key="equity_curve"
+                  equityCurve={backtest.equity_curve}
+                  benchmarkCurve={backtest.benchmark_curve}
+                  holdingSchedule={backtest.holding_schedule}
+                />
+              ) : (
                 <EquityCurve key="equity_curve"
                   equityCurve={backtest?.equity_curve}
                   benchmarkCurve={backtest?.benchmark_curve}

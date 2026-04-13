@@ -75,3 +75,5 @@ class BacktestResult(BaseModel):
     rolling_metrics: Optional[RollingMetrics] = None
     correlation_matrix: Optional[dict] = None  # {ticker: {ticker: float}}
     fx_curves: Optional[dict[str, list[TimeSeriesPoint]]] = None  # {currency: [{date, value}]}
+    # Populated by rotation backtests — shows which tickers were held each window
+    holding_schedule: Optional[list[dict]] = None  # [{window_start, window_end, label, tickers: [str]}]

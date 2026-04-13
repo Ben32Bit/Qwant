@@ -210,6 +210,21 @@ def run_rotation_backtest(req: RotationBacktestRequest) -> BacktestResult:
     ][:top_n_held]
     current_holdings = first_tops if first_tops else valid[:top_n_held]
 
+    # Build holding_schedule for frontend visualisation
+    # Maps each window to the tickers actually held during that window
+    holding_schedule = []
+    for i, win in enumerate(screen.windows):
+        if i == 0:
+            held = first_tops if first_tops else valid[:top_n_held]
+        else:
+            held = rotation_map.get(win.window_start, holding_schedule[-1]["tickers"] if holding_schedule else valid[:top_n_held])
+        holding_schedule.append({
+            "window_start": win.window_start,
+            "window_end": win.window_end,
+            "label": win.label,
+            "tickers": held,
+        })
+
     # Run daily backtest
     portfolio_values = [initial_capital]
     rotation_date_strs = list(rotation_map.keys())
@@ -267,4 +282,5 @@ def run_rotation_backtest(req: RotationBacktestRequest) -> BacktestResult:
         monthly_returns=MonthlyReturns(data=monthly_grid),
         metrics=PortfolioMetrics(**raw_metrics),
         rebalance_dates=rotation_date_strs,
+        holding_schedule=holding_schedule,
     )
