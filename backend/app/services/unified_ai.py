@@ -116,7 +116,7 @@ Finalise a portfolio. Rules:
 - Set `display_config` with appropriate sections and the full markdown narrative
 
 ### display_config.sections
-Always include: equity_curve, drawdown, metrics_summary. Add:
+Always include: equity_curve, drawdown, metrics_summary, ff5_decomposition. Add:
 - weight_drift when ≥2 assets
 - correlation_matrix when ≥3 assets and diversification is the goal
 - rolling_metrics when risk consistency over time matters
@@ -223,7 +223,8 @@ PORTFOLIO_TOOL = {
                         "items": {
                             "type": "string",
                             "enum": ["equity_curve", "drawdown", "metrics_summary", "full_metrics",
-                                     "monthly_heatmap", "correlation_matrix", "rolling_metrics", "weight_drift"],
+                                     "monthly_heatmap", "correlation_matrix", "rolling_metrics", "weight_drift",
+                                     "ff5_decomposition"],
                         },
                     },
                     "featured_metrics": {"type": "array", "items": {"type": "string"}},

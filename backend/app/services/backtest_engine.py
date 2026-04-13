@@ -3,6 +3,7 @@ import numpy as np
 from typing import Optional
 from app.services.data_service import fetch_prices
 from app.services.metrics import calculate_metrics, build_monthly_returns_grid
+from app.services.factor_decomposition import compute_ff5
 from app.models.portfolio import PortfolioInput
 from app.models.backtest_result import (
     BacktestResult, TimeSeriesPoint, DrawdownPoint,
@@ -222,6 +223,9 @@ def run_full_backtest(portfolio_input: PortfolioInput) -> BacktestResult:
     # FX-adjusted equity curves
     fx_curves = _compute_fx_curves(portfolio_series, portfolio_input.start_date, portfolio_input.end_date)
 
+    # Fama-French Five-Factor decomposition
+    ff5 = compute_ff5(portfolio_returns)
+
     return BacktestResult(
         equity_curve=equity_curve,
         benchmark_curve=bm_curve,
@@ -233,6 +237,7 @@ def run_full_backtest(portfolio_input: PortfolioInput) -> BacktestResult:
         rolling_metrics=rolling,
         correlation_matrix=corr_matrix,
         fx_curves=fx_curves,
+        ff5_decomposition=ff5,
     )
 
 

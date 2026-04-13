@@ -8,6 +8,7 @@ import CorrelationMatrix from './CorrelationMatrix.jsx'
 import RollingMetrics from './RollingMetrics.jsx'
 import AiNarrative from './AiNarrative.jsx'
 import WeightDriftChart from './WeightDriftChart.jsx'
+import FamaFrenchFactors from './FamaFrenchFactors.jsx'
 import { fmtPct, fmtRatio, colorClass } from '../../utils/formatters.js'
 import { exportToExcel } from '../../utils/exportExcel.js'
 
@@ -205,6 +206,13 @@ export default function ResultsPanel({ backtest, portfolio, displayConfig, loadi
                 <WeightDriftChart key="weight_drift"
                   weightHistory={backtest?.weight_history}
                   rebalanceDates={backtest?.rebalance_dates}
+                  loading={loading}
+                />
+              )
+            case 'ff5_decomposition':
+              return (
+                <FamaFrenchFactors key="ff5_decomposition"
+                  ff5={backtest?.ff5_decomposition}
                   loading={loading}
                 />
               )

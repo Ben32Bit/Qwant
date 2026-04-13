@@ -1,5 +1,30 @@
 # Context Log — Portfolio Backtester
 
+---
+
+## 2026-04-13 — Fama-French Five-Factor Decomposition
+
+**What:** Added FF5 decomposition panel to every portfolio backtest result. Regresses daily portfolio excess returns on the five Fama-French factors (Mkt-RF, SMB, HML, RMW, CMA) and reports factor loadings, t-statistics, significance stars, annualised alpha, and R².
+
+**Reference:** Fama, E.F. & French, K.R. (2015). A five-factor asset pricing model. Journal of Financial Economics, 116(1), 1–22. https://doi.org/10.1016/j.jfineco.2014.10.010
+
+**Files created:**
+- `backend/app/services/factor_decomposition.py` — OLS regression service. Primary: fetches official daily FF5 data from Ken French's data library via `pandas_datareader`. Fallback: constructs factor proxies from ETF returns (IWM-IWB for SMB, IWD-IWF for HML, QUAL-USMV for RMW, inverse MTUM for CMA). Returns alpha (annualised), betas, t-stats, significance stars, R², n_obs, source.
+- `frontend/src/components/Dashboard/FamaFrenchFactors.jsx` — Table component showing all six rows (α + 5 factors). Each factor label has a `?` hover tooltip with a one-sentence description AND the full paper citation. Significance indicated by t-stat colour (green=***, yellow=**, pink=*, grey=n.s.) and stars. Footer repeats the full citation.
+
+**Files modified:**
+- `backend/requirements.txt` — added `pandas-datareader==0.10.0`
+- `backend/app/models/backtest_result.py` — added `ff5_decomposition: Optional[dict] = None` to `BacktestResult`
+- `backend/app/services/backtest_engine.py` — imports `compute_ff5`, calls it after computing `portfolio_returns`, passes result into `BacktestResult`
+- `backend/app/services/unified_ai.py` — added `ff5_decomposition` to sections enum in `PORTFOLIO_TOOL` and to the system prompt sections guidance (always include)
+- `frontend/src/components/Dashboard/ResultsPanel.jsx` — imports `FamaFrenchFactors`, added `case 'ff5_decomposition':` in sections switch
+
+**Decisions:**
+- Alpha is annualised as `(1 + daily_alpha)^252 - 1` for comparability with CAGR
+- Uses Ken French's official daily dataset when available; falls back to ETF proxies silently
+- Minimum 60 observations required; returns `None` (panel hidden) if insufficient data
+- `ff5_decomposition` is always added to `display_config.sections` by the AI system prompt
+
 This file tracks all changes, decisions, and project state. Updated by Claude Code after every meaningful change.
 
 ---

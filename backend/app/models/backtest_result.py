@@ -77,3 +77,5 @@ class BacktestResult(BaseModel):
     fx_curves: Optional[dict[str, list[TimeSeriesPoint]]] = None  # {currency: [{date, value}]}
     # Populated by rotation backtests — shows which tickers were held each window
     holding_schedule: Optional[list[dict]] = None  # [{window_start, window_end, label, tickers: [str]}]
+    # Fama-French Five-Factor decomposition (Fama & French, 2015)
+    ff5_decomposition: Optional[dict] = None
