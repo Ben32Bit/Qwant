@@ -2,6 +2,16 @@
 
 ---
 
+## 2026-04-13 — FF5 tooltip and significance display polish
+
+**What:** Fixed two UI issues in the Fama-French panel.
+- Tooltip was clipped at top of card — changed from `bottom: 120%` (opens upward) to `top: 120%` (opens downward) so it's never cut off.
+- Removed `***`/`**`/`*` star text from t-stat column — confusing alongside the colour coding. Kept colour-only significance (green=p<0.001, yellow=p<0.01, pink=p<0.05, grey=n.s.). Legend updated to show coloured squares + p-value labels instead of stars.
+
+**Files modified:** `frontend/src/components/Dashboard/FamaFrenchFactors.jsx`
+
+---
+
 ## 2026-04-13 — Fama-French Five-Factor Decomposition
 
 **What:** Added FF5 decomposition panel to every portfolio backtest result. Regresses daily portfolio excess returns on the five Fama-French factors (Mkt-RF, SMB, HML, RMW, CMA) and reports factor loadings, t-statistics, significance stars, annualised alpha, and R².

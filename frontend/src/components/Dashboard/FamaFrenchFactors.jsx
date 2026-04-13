@@ -65,9 +65,8 @@ function InfoTooltip({ content, citation }) {
             borderColor: 'var(--border)',
             color: 'var(--text-primary)',
             width: 280,
-            bottom: '120%',
-            left: '50%',
-            transform: 'translateX(-50%)',
+            top: '120%',
+            left: 0,
             boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
             pointerEvents: 'none',
           }}
@@ -119,7 +118,6 @@ function FactorRow({ factorKey, data }) {
       </td>
       <td className="py-2 px-3 text-right mono text-xs" style={{ color: sigColor(t) }}>
         {t != null ? t.toFixed(2) : '—'}
-        <span className="ml-1" style={{ fontSize: 11 }}>{stars}</span>
       </td>
     </tr>
   )
@@ -164,15 +162,18 @@ export default function FamaFrenchFactors({ ff5, loading }) {
         </div>
       </div>
 
-      {/* Significance legend */}
+      {/* Significance legend — t-stat colour key */}
       <div className="flex gap-4 mb-3 flex-wrap">
         {[
-          { label: '*** p<0.001', color: 'var(--accent-green)' },
-          { label: '** p<0.01', color: '#ffd43b' },
-          { label: '* p<0.05', color: '#fd79a8' },
+          { label: 'p<0.001', color: 'var(--accent-green)' },
+          { label: 'p<0.01', color: '#ffd43b' },
+          { label: 'p<0.05', color: '#fd79a8' },
           { label: 'n.s.', color: 'var(--text-secondary)' },
         ].map(({ label, color }) => (
-          <span key={label} className="mono text-xs" style={{ color }}>{label}</span>
+          <span key={label} className="mono text-xs flex items-center gap-1" style={{ color }}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: color, display: 'inline-block', flexShrink: 0 }} />
+            {label}
+          </span>
         ))}
       </div>
 
