@@ -196,10 +196,19 @@ def run_full_backtest(portfolio_input: PortfolioInput) -> BacktestResult:
     ]
     bm_curve = thin_ts(benchmark_series) if benchmark_series is not None else None
 
-    # Thin weight history to ≤300 points (preserving first + last)
+    # Thin weight history to ≤300 points (preserving first, last, and all rebalance dates)
     wh_step = max(1, len(weight_history) // 300)
+    rebalance_date_set = set(rebalance_dates_list)
+    rebalance_indices = [
+        i for i, r in enumerate(weight_history.itertuples())
+        if r.date in rebalance_date_set
+    ]
     wh_thinned = weight_history.iloc[
-        sorted(set(list(range(0, len(weight_history), wh_step)) + [len(weight_history) - 1]))
+        sorted(set(
+            list(range(0, len(weight_history), wh_step))
+            + rebalance_indices
+            + [len(weight_history) - 1]
+        ))
     ]
     # Round weights for compactness
     wh_records = []

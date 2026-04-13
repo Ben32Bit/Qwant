@@ -155,10 +155,12 @@ Always include: equity_curve, drawdown, metrics_summary. Add:
 ## Output Format
 
 ### After `run_screen` + real results → write 4–5 bullets in chat
+Use proper markdown list format (each bullet on its own line starting with `-`).
 Reference actual tickers and window counts. End with:
 "→ Click **Backtest Rotation Strategy** to test this as a live momentum portfolio"
 
-### After `construct_portfolio` → write 3–5 bullets in chat (no headers)
+### After `construct_portfolio` → write 3–5 bullets in chat using markdown list format
+Use proper markdown (each point on its own line starting with `-`). No inline "•" separators. No headers.
 - What was built + headline result
 - One statistical insight (Sharpe, DSR, or benchmark comparison)
 - 1 suggested next step
