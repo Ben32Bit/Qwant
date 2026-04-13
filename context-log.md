@@ -110,6 +110,62 @@ This file tracks all changes, decisions, and project state. Updated by Claude Co
 
 ---
 
+## 2026-04-13 — Merge AI Portfolio Builder + AI Stock Screener into single unified chat
+
+**Commit:** `2f2d4b1`
+
+**What:** Replaced the two separate chat panels (ChatPanel for portfolio, StockScreenerPanel for screener) and the three-tab layout with a single unified chat panel. Claude now routes to the right pipeline based on intent keywords in the user's message. This was the largest structural change to the frontend.
+
+**Backend — new files/changes:**
+- `backend/app/services/unified_ai.py` (new, 433 lines) — single AI service with all three tools: `get_asset_statistics`, `construct_portfolio`, `run_screen`. System prompt has explicit ROUTING GUIDE with signal phrases ("top / best / each quarter" → screener; "portfolio / allocate / backtest" → portfolio). Portfolio path runs full agentic research loop; screener path runs real window screener then feeds results back to Claude for a data-aware narrative.
+- `backend/app/routers/unified.py` (new) — `POST /api/unified/chat`. Returns `{type: "portfolio"|"screener"|"clarification", ...result}`.
+- `backend/app/main.py` — registered unified router.
+
+**Frontend — changed files:**
+- `frontend/src/components/Chat/UnifiedChatPanel.jsx` (new, replaces ChatPanel + StockScreenerPanel) — single chat panel. Empty state shows "Portfolio Builder" (blue) + "Asset Screener" (purple) capability pills with a short "how to use" card. 4 suggestion chips (2 portfolio/blue, 2 screener/purple). Loading indicator adapts label to detected result type.
+- `frontend/src/components/Layout/SplitView.jsx` — reduced from 3 tabs to 2 (AI Assistant + Manual Build). Right panel dynamically renders `ScreenerResults`+`RotationPanel` or `ResultsPanel` based on the `type` field of the last result. All import flows (screenerImport, rotationImport) preserved.
+- `frontend/src/components/Layout/App.jsx` — simplified; chat state now managed inside SplitView/UnifiedChatPanel. Header updated to "AI Investment Analyst".
+
+**Decisions:**
+- "Unified" approach chosen over tabs because screener and portfolio use the same input box and should feel like one conversation
+- Screener vs portfolio routing is done by Claude (not regex/client-side) — more robust to paraphrasing
+- `type` field in the response drives which right panel is shown: screener gets `ScreenerResults` split-view; portfolio gets `ResultsPanel`; clarification gets only the chat message
+- `StockScreenerPanel.jsx` and `ChatPanel.jsx` retained in codebase but no longer used
+
+---
+
+## 2026-04-13 — Fix portfolio builder "Request failed" + optimise agentic loop
+
+**Commit:** `52ab884`
+
+**What:** Two bugs and three performance optimisations in `unified_ai.py` right after the merge.
+
+**Bugs fixed:**
+- Wrong backtest function called: was calling `run_backtest(portfolio_input)` (low-level, takes a prices DataFrame) instead of `run_full_backtest(portfolio_input)` (the high-level wrapper that fetches prices, runs backtest, computes all metrics, rolling metrics, correlation matrix, FX curves). This caused every portfolio request to throw a TypeError.
+- Missing `apply_strategy()` call for non-custom strategies (min_variance, max_sharpe, risk_parity, etc.) — weights were being sent unoptimised. Added, matching the logic in `chat.py`.
+- Removed duplicate `import os` at module level.
+
+**Optimisations:**
+- `MAX_ITERATIONS` reduced from 6 → 4. Most requests complete in ≤2 turns; 4 gives headroom without runaway loops.
+- `max_tokens` for final chat bubble reduced 1024 → 512 (3–5 bullets needs far less).
+- System prompt: explicit rule to skip `get_asset_statistics` for portfolios where the user already gave weights or named a known strategy — reduces most common case from 3 API calls to 2.
+- System prompt: "limit to one `get_asset_statistics` call" — prevents multi-call research loops.
+- Screener narrative `max_tokens` also capped at 512.
+
+**Files modified:** `backend/app/services/unified_ai.py`
+
+---
+
+## 2026-04-13 — Reduce suggestion chips to 4 per AI chat panel
+
+**Commit:** `b380aab`
+
+**What:** Trimmed the suggestion chips in both `ChatPanel` and `StockScreenerPanel` from 6 to 4 each before the unified merge. Reduces visual noise and makes the most relevant examples more prominent.
+
+**Files modified:** `frontend/src/components/Chat/PromptSuggestions.jsx`, `frontend/src/components/Chat/StockScreenerPanel.jsx`
+
+---
+
 ## 2026-04-13 — AI Stock Screener tab (full feature)
 
 **What:** Added a second AI mode — "AI Stock Screener" — as a new tab alongside "AI Portfolio Builder" and "Manual Build". Screener lets users ask retroactive window-based screening questions ("top return sector ETF each quarter 2022–2025"), see ranked results per window, backtest a rotation strategy, and link directly to Manual Build.
