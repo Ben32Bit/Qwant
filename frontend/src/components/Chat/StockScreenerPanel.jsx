@@ -5,11 +5,7 @@ import remarkGfm from 'remark-gfm'
 const SUGGESTIONS = [
   'Top return sector ETF each quarter, 2022–2025',
   'Best Sharpe among FAANG stocks by year since 2018',
-  'Least volatile asset class each month in 2023',
   'Top momentum stock (AAPL, MSFT, NVDA, META, GOOGL) each quarter',
-  'Most resilient bond ETF each quarter, 2020–2024',
-  'Best performing global market each year since 2018',
-  'Which sector led each month in 2024?',
   'Top commodity each quarter: GLD, SLV, USO, DBC',
 ]
 

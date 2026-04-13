@@ -3,10 +3,6 @@ import React from 'react'
 const SUGGESTIONS = [
   '60/40 US stocks and bonds over 10 years',
   'All-weather portfolio since 2010',
-  'Tech heavy — FAANG equal weight vs SPY',
-  'Global diversified: US, International, Bonds, Gold',
-  'Momentum strategy: QQQ + TLT + GLD rotation',
-  'Warren Buffett style: 90% SPY + 10% short-term treasuries',
   'Max Sharpe portfolio from SPY, TLT, GLD, EEM',
   'Risk parity across stocks, bonds, gold, commodities',
 ]
