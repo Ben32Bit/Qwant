@@ -259,8 +259,10 @@ def run_rotation_backtest(req: RotationBacktestRequest) -> BacktestResult:
             bm_returns = bm_aligned.pct_change().dropna()
 
     # Metrics + series
+    from app.services.factor_decomposition import compute_ff5
     raw_metrics = calculate_metrics(portfolio_returns, bm_returns, RISK_FREE_RATE)
     monthly_grid = build_monthly_returns_grid(portfolio_returns)
+    ff5 = compute_ff5(portfolio_returns)
 
     cum = (1 + portfolio_returns).cumprod()
     dd = ((cum - cum.cummax()) / cum.cummax()).fillna(0)
@@ -283,4 +285,5 @@ def run_rotation_backtest(req: RotationBacktestRequest) -> BacktestResult:
         metrics=PortfolioMetrics(**raw_metrics),
         rebalance_dates=rotation_date_strs,
         holding_schedule=holding_schedule,
+        ff5_decomposition=ff5,
     )
