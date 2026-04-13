@@ -2,6 +2,14 @@
 
 ---
 
+## 2026-04-13 — FF5 tooltip portal fix (all rows)
+
+**What:** Bottom-row tooltips (Value, Profitability, Investment) were clipped by the card boundary. Rewrote `InfoTooltip` to use `ReactDOM.createPortal` — tooltip is rendered into `document.body` at a `position: fixed` coordinate calculated from the button's `getBoundingClientRect()`. Opens below the button when there's room (>160px), flips above otherwise. Left position clamped to keep it inside the viewport.
+
+**Files modified:** `frontend/src/components/Dashboard/FamaFrenchFactors.jsx`
+
+---
+
 ## 2026-04-13 — FF5 tooltip and significance display polish
 
 **What:** Fixed two UI issues in the Fama-French panel.

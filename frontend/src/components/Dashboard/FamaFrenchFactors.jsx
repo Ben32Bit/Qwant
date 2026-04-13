@@ -1,4 +1,5 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
+import { createPortal } from 'react-dom'
 
 const PAPER_CITATION = 'Fama, E.F. & French, K.R. (2015). A five-factor asset pricing model. Journal of Financial Economics, 116(1), 1–22. https://doi.org/10.1016/j.jfineco.2014.10.010'
 
@@ -35,39 +36,60 @@ const FACTOR_META = {
   },
 }
 
+const TOOLTIP_WIDTH = 288
+
 function InfoTooltip({ content, citation }) {
   const [show, setShow] = useState(false)
+  const [pos, setPos] = useState({ top: 0, left: 0 })
+  const btnRef = useRef(null)
+
+  const handleShow = () => {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom
+      const top = spaceBelow > 160 ? rect.bottom + 6 : rect.top - 160
+      const left = Math.min(rect.left, window.innerWidth - TOOLTIP_WIDTH - 12)
+      setPos({ top, left })
+    }
+    setShow(true)
+  }
+
   return (
-    <span className="relative inline-block ml-1 align-middle">
+    <span className="inline-block ml-1 align-middle" style={{ position: 'relative' }}>
       <button
-        className="mono text-xs rounded-full w-4 h-4 flex items-center justify-center leading-none"
+        ref={btnRef}
+        className="mono rounded-full flex items-center justify-center"
         style={{
+          width: 16, height: 16,
           background: 'rgba(74,158,255,0.15)',
           color: 'var(--accent-blue)',
           border: '1px solid rgba(74,158,255,0.3)',
           cursor: 'pointer',
           fontSize: 10,
           lineHeight: 1,
+          flexShrink: 0,
         }}
-        onMouseEnter={() => setShow(true)}
+        onMouseEnter={handleShow}
         onMouseLeave={() => setShow(false)}
-        onFocus={() => setShow(true)}
+        onFocus={handleShow}
         onBlur={() => setShow(false)}
         aria-label="Factor description"
       >
         ?
       </button>
-      {show && (
+      {show && createPortal(
         <div
-          className="absolute z-50 rounded-lg border p-3 text-xs"
+          className="rounded-lg border p-3 text-xs"
           style={{
+            position: 'fixed',
+            top: pos.top,
+            left: pos.left,
+            width: TOOLTIP_WIDTH,
+            zIndex: 9999,
             background: 'var(--bg-secondary)',
             borderColor: 'var(--border)',
             color: 'var(--text-primary)',
-            width: 280,
-            top: '120%',
-            left: 0,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
             pointerEvents: 'none',
           }}
         >
@@ -75,7 +97,8 @@ function InfoTooltip({ content, citation }) {
           <p className="leading-relaxed" style={{ color: 'var(--text-secondary)', fontSize: 10 }}>
             📄 {citation}
           </p>
-        </div>
+        </div>,
+        document.body
       )}
     </span>
   )
