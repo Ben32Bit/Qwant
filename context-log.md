@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-04-14 — Drawdown tooltip bug fix + FF5 in screener rotation panel
+
+**What:** Two fixes.
+
+**1. Drawdown tooltip showing absurd values (e.g. -698.10%)**
+Root cause: `DrawdownChart.jsx` converts raw decimal drawdown to percentage in `useMemo` (`pt.drawdown * 100`), then the tooltip called `fmtPct(value)` which multiplies by 100 again. Result was a ×10,000 exaggeration.
+Fix: tooltip now renders `${value.toFixed(2)}%` directly. Also removed the now-unused `fmtPct` import. This fix covers both the main portfolio drawdown and the screener rotation panel drawdown (both use the same `DrawdownChart` component).
+
+**2. FF5 decomposition missing from screener rotation backtest panel**
+The backend already computes `ff5_decomposition` for rotation backtests (since it goes through `run_full_backtest`). Added `FamaFrenchFactors` to the `RotationPanel` component in `SplitView.jsx`, which renders the screener rotation results.
+
+**Files modified:**
+- `frontend/src/components/Dashboard/DrawdownChart.jsx` — tooltip formatting fix + removed unused import
+- `frontend/src/components/Layout/SplitView.jsx` — added `FamaFrenchFactors` import + rendered after `MetricsCards` in `RotationPanel`
+
+---
+
 ## 2026-04-13 — FF5 tooltip portal fix (all rows)
 
 **What:** Bottom-row tooltips (Value, Profitability, Investment) were clipped by the card boundary. Rewrote `InfoTooltip` to use `ReactDOM.createPortal` — tooltip is rendered into `document.body` at a `position: fixed` coordinate calculated from the button's `getBoundingClientRect()`. Opens below the button when there's room (>160px), flips above otherwise. Left position clamped to keep it inside the viewport.
@@ -13,10 +30,43 @@
 ## 2026-04-13 — FF5 tooltip and significance display polish
 
 **What:** Fixed two UI issues in the Fama-French panel.
-- Tooltip was clipped at top of card — changed from `bottom: 120%` (opens upward) to `top: 120%` (opens downward) so it's never cut off.
-- Removed `***`/`**`/`*` star text from t-stat column — confusing alongside the colour coding. Kept colour-only significance (green=p<0.001, yellow=p<0.01, pink=p<0.05, grey=n.s.). Legend updated to show coloured squares + p-value labels instead of stars.
+- Tooltip was clipped at top of card — changed from `bottom: 120%` (opens upward) to `top: 120%` (opens downward) — this was a partial fix, the portal approach above was the final fix.
+- Removed `***`/`**`/`*` star text from t-stat column — confusing alongside colour coding. Kept colour-only significance. Legend updated to coloured squares + p-value labels.
 
 **Files modified:** `frontend/src/components/Dashboard/FamaFrenchFactors.jsx`
+
+---
+
+## 2026-04-13 — WeightDriftChart bug fixes (Y-axis, tooltip, rebalance lines)
+
+**What:** Three separate bugs fixed in the Holdings Over Time chart.
+
+**1. Y-axis not showing 0–100%**
+AreaChart `YAxis` was missing `domain={[0, 100]}`. Added it so the stacked area always fills to 100%.
+
+**2. Tooltip showing values like +6355%**
+Root cause: chart data was already converted to percentage (`row[t] * 100`), but tooltip called `fmtPct(value)` which multiplied by 100 again. Fixed to `{p.value.toFixed(1)}%` directly.
+
+**3. Rebalance lines missing (only 4–5 of ~40 quarterly lines visible)**
+Root cause: weight history is thinned to ~300 rows server-side (step every N rows). Recharts `ReferenceLine x=` requires an exact match in the data array. Most quarterly rebalance dates were being skipped by the thinning step.
+Fix: `backtest_engine.py` now explicitly preserves ALL rebalance date indices when building the thinned dataset, regardless of the step size.
+
+**4. ReferenceLine label crash**
+`label={<RebalanceLabel />}` pre-instantiates the component, preventing Recharts from injecting the `viewBox` prop → crash. Fixed to `label={RebalanceLabel}` (component reference).
+
+**Files modified:**
+- `frontend/src/components/Dashboard/WeightDriftChart.jsx` — tooltip, Y-axis domain, ReferenceLine label fix
+- `backend/app/services/backtest_engine.py` — weight history thinning preserves all rebalance dates
+
+---
+
+## 2026-04-13 — AI chat markdown rendering fix
+
+**What:** AI chat responses were using inline `•` separators on a single line instead of proper markdown bullet points. ReactMarkdown was already wired in `MessageBubble.jsx` correctly — the issue was the AI generating non-markdown bullet format.
+
+**Fix:** Updated `UNIFIED_SYSTEM_PROMPT` Output Format section to explicitly require proper markdown list format (each bullet on its own line starting with `-`). Prohibited inline `•` separators.
+
+**Files modified:** `backend/app/services/unified_ai.py`
 
 ---
 
@@ -28,7 +78,7 @@
 
 **Files created:**
 - `backend/app/services/factor_decomposition.py` — OLS regression service. Primary: fetches official daily FF5 data from Ken French's data library via `pandas_datareader`. Fallback: constructs factor proxies from ETF returns (IWM-IWB for SMB, IWD-IWF for HML, QUAL-USMV for RMW, inverse MTUM for CMA). Returns alpha (annualised), betas, t-stats, significance stars, R², n_obs, source.
-- `frontend/src/components/Dashboard/FamaFrenchFactors.jsx` — Table component showing all six rows (α + 5 factors). Each factor label has a `?` hover tooltip with a one-sentence description AND the full paper citation. Significance indicated by t-stat colour (green=***, yellow=**, pink=*, grey=n.s.) and stars. Footer repeats the full citation.
+- `frontend/src/components/Dashboard/FamaFrenchFactors.jsx` — Table component showing all six rows (α + 5 factors). Each factor label has a `?` hover tooltip (portal-rendered, viewport-aware) with factor description and full paper citation. Significance indicated by t-stat colour only (green=p<0.001, yellow=p<0.01, pink=p<0.05, grey=n.s.). Footer repeats full citation.
 
 **Files modified:**
 - `backend/requirements.txt` — added `pandas-datareader==0.10.0`

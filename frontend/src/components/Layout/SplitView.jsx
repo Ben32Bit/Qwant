@@ -6,6 +6,7 @@ import ScreenerResults from '../Dashboard/ScreenerResults.jsx'
 import RotationEquityChart from '../Dashboard/RotationEquityChart.jsx'
 import DrawdownChart from '../Dashboard/DrawdownChart.jsx'
 import MetricsCards from '../Dashboard/MetricsCards.jsx'
+import FamaFrenchFactors from '../Dashboard/FamaFrenchFactors.jsx'
 
 // ── Tab definitions ───────────────────────────────────────────────────────────
 const TABS = [
@@ -99,6 +100,7 @@ function RotationPanel({ backtest, loading, topNHeld, onPortToManual }) {
         />
         <DrawdownChart drawdownSeries={backtest.drawdown_series} loading={false} />
         <MetricsCards metrics={backtest.metrics} loading={false} />
+        <FamaFrenchFactors ff5={backtest.ff5_decomposition} loading={false} />
       </div>
     </div>
   )

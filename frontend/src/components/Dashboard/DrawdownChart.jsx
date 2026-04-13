@@ -9,7 +9,6 @@ import {
   Tooltip,
 } from 'recharts'
 import { AXIS_STYLE, TOOLTIP_STYLE, GRID_STYLE } from '../../utils/chartConfig.js'
-import { fmtPct } from '../../utils/formatters.js'
 
 function CustomTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
@@ -17,7 +16,7 @@ function CustomTooltip({ active, payload, label }) {
     <div style={{ ...TOOLTIP_STYLE, padding: '10px 14px' }}>
       <div className="mono text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>{label}</div>
       <div className="mono text-sm" style={{ color: 'var(--accent-red)' }}>
-        Drawdown: {fmtPct(payload[0]?.value)}
+        Drawdown: {payload[0]?.value?.toFixed(2)}%
       </div>
     </div>
   )
