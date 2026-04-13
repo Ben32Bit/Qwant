@@ -13,7 +13,6 @@ import {
   ReferenceLine,
 } from 'recharts'
 import { AXIS_STYLE, TOOLTIP_STYLE, GRID_STYLE } from '../../utils/chartConfig.js'
-import { fmtPct } from '../../utils/formatters.js'
 
 // Distinct palette for up to 10 holdings
 const PALETTE = [
@@ -32,7 +31,7 @@ function CustomTooltip({ active, payload, label }) {
         <div key={p.dataKey} className="mono text-xs flex items-center justify-between gap-4 mb-0.5">
           <span style={{ color: p.color }}>■ {p.dataKey}</span>
           <span style={{ color: p.value < 0 ? 'var(--accent-red)' : 'var(--text-primary)' }}>
-            {fmtPct(p.value, 1)}
+            {p.value.toFixed(1)}%
           </span>
         </div>
       ))}
@@ -40,15 +39,17 @@ function CustomTooltip({ active, payload, label }) {
   )
 }
 
-function RebalanceLine({ x, height }) {
-  if (x == null) return null
+// Small rebalance marker rendered at top of a ReferenceLine via customized label
+function RebalanceLabel({ viewBox }) {
+  if (!viewBox) return null
+  const { x } = viewBox
   return (
-    <line
-      x1={x} x2={x} y1={0} y2={height}
-      stroke="rgba(255,255,255,0.15)"
-      strokeWidth={1}
-      strokeDasharray="3 3"
-    />
+    <g>
+      <polygon
+        points={`${x - 4},2 ${x + 4},2 ${x},9`}
+        fill="rgba(255,215,0,0.7)"
+      />
+    </g>
   )
 }
 
@@ -113,7 +114,7 @@ export default function WeightDriftChart({ weightHistory, rebalanceDates, loadin
             Holdings Over Time
           </h3>
           <p className="mono text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-            Weight drift between rebalances · dashed lines = rebalance events
+            Weight drift between rebalances · gold lines = rebalance events
           </p>
         </div>
         {!hasShorts && (
@@ -143,8 +144,8 @@ export default function WeightDriftChart({ weightHistory, rebalanceDates, loadin
               <defs>
                 {tickers.map(t => (
                   <linearGradient key={t} id={`grad-${t}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={tickerColors[t]} stopOpacity={0.5} />
-                    <stop offset="95%" stopColor={tickerColors[t]} stopOpacity={0.15} />
+                    <stop offset="5%" stopColor={tickerColors[t]} stopOpacity={0.7} />
+                    <stop offset="95%" stopColor={tickerColors[t]} stopOpacity={0.3} />
                   </linearGradient>
                 ))}
               </defs>
@@ -162,7 +163,7 @@ export default function WeightDriftChart({ weightHistory, rebalanceDates, loadin
                 tick={AXIS_STYLE.tick}
                 axisLine={AXIS_STYLE.axisLine}
                 tickLine={AXIS_STYLE.tickLine}
-                domain={[0, 'auto']}
+                domain={[0, 100]}
               />
               <Tooltip content={<CustomTooltip />} />
               <Legend
@@ -170,7 +171,7 @@ export default function WeightDriftChart({ weightHistory, rebalanceDates, loadin
               />
               {/* Rebalance reference lines */}
               {(rebalanceDates || []).slice(1).map(d => (
-                <ReferenceLine key={d} x={d} stroke="rgba(255,255,255,0.12)" strokeDasharray="3 3" />
+                <ReferenceLine key={d} x={d} stroke="rgba(255,215,0,0.6)" strokeWidth={1.5} strokeDasharray="3 3" label={RebalanceLabel} />
               ))}
               {tickers.map(t => (
                 <Area
@@ -210,7 +211,7 @@ export default function WeightDriftChart({ weightHistory, rebalanceDates, loadin
               />
               {/* Rebalance reference lines */}
               {(rebalanceDates || []).slice(1).map(d => (
-                <ReferenceLine key={d} x={d} stroke="rgba(255,255,255,0.12)" strokeDasharray="3 3" />
+                <ReferenceLine key={d} x={d} stroke="rgba(255,215,0,0.6)" strokeWidth={1.5} strokeDasharray="3 3" label={RebalanceLabel} />
               ))}
               {tickers.map(t => (
                 <Line
