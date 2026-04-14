@@ -1,7 +1,7 @@
-import React from 'react'
+import React, { useState } from 'react'
 
 /**
- * Renders the AI's markdown narrative in the results panel.
+ * Collapsible AI analysis panel. Closed by default — click the header to expand.
  * Supports: ## headings, **bold**, bullet lists, paragraphs.
  */
 function parseMarkdown(text) {
@@ -15,10 +15,8 @@ function parseMarkdown(text) {
   while (i < lines.length) {
     const line = lines[i]
 
-    // Skip empty lines
     if (!line.trim()) { i++; continue }
 
-    // ## Heading
     if (line.startsWith('## ')) {
       elements.push(
         <h3 key={key++} className="mono font-bold text-sm mt-4 mb-2" style={{ color: 'var(--accent-blue)' }}>
@@ -28,7 +26,6 @@ function parseMarkdown(text) {
       i++; continue
     }
 
-    // ### Sub-heading
     if (line.startsWith('### ')) {
       elements.push(
         <h4 key={key++} className="mono font-bold text-xs mt-3 mb-1 uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
@@ -38,7 +35,6 @@ function parseMarkdown(text) {
       i++; continue
     }
 
-    // Bullet list block
     if (line.startsWith('- ') || line.startsWith('* ')) {
       const items = []
       while (i < lines.length && (lines[i].startsWith('- ') || lines[i].startsWith('* '))) {
@@ -54,7 +50,6 @@ function parseMarkdown(text) {
       continue
     }
 
-    // Regular paragraph
     elements.push(
       <p key={key++} className="text-sm mb-2 leading-relaxed" style={{ color: 'var(--text-primary)' }}>
         {inlineFormat(line)}
@@ -67,7 +62,6 @@ function parseMarkdown(text) {
 }
 
 function inlineFormat(text) {
-  // Split on **bold** markers
   const parts = text.split(/(\*\*[^*]+\*\*)/)
   return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) {
@@ -78,19 +72,50 @@ function inlineFormat(text) {
 }
 
 export default function AiNarrative({ narrative }) {
+  const [open, setOpen] = useState(false)
+
   if (!narrative) return null
 
   return (
     <div
-      className="rounded-lg border p-4"
+      className="rounded-lg border overflow-hidden"
       style={{ borderColor: 'rgba(74,158,255,0.25)', background: 'rgba(74,158,255,0.04)' }}
     >
-      <div className="flex items-center gap-2 mb-3">
+      {/* Clickable header — always visible */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-4 py-3 transition-colors"
+        style={{
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          borderBottom: open ? '1px solid rgba(74,158,255,0.15)' : 'none',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(74,158,255,0.06)' }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+      >
         <span className="mono text-xs font-bold" style={{ color: 'var(--accent-blue)' }}>
           ▶ AI ANALYSIS
         </span>
-      </div>
-      <div>{parseMarkdown(narrative)}</div>
+        <span
+          className="mono text-xs transition-transform"
+          style={{
+            color: 'var(--accent-blue)',
+            display: 'inline-block',
+            transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+            transition: 'transform 0.2s ease',
+          }}
+        >
+          ▾
+        </span>
+      </button>
+
+      {/* Collapsible content */}
+      {open && (
+        <div className="px-4 py-3">
+          {parseMarkdown(narrative)}
+        </div>
+      )}
     </div>
   )
 }

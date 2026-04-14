@@ -164,10 +164,12 @@ def call_screener_ai(
     tc = tool_calls[0]
     inp = tc.input
 
+    # end_date is always today — hard requirement regardless of what the AI returned
+    today = date.today().strftime("%Y-%m-%d")
     screen_req = ScreenRequest(
         tickers=inp["tickers"],
         start_date=inp.get("start_date", start),
-        end_date=inp.get("end_date", end),
+        end_date=today,
         window_freq=inp.get("window_freq", "quarterly"),
         metric=inp.get("metric", "return"),
         top_n=int(inp.get("top_n", 3)),

@@ -101,7 +101,11 @@ These tickers are pre-cached for fast response — prefer them when the user doe
 ### top_n — default 3
 - "top 1 / best / winner" → 1  |  "top 3" → 3  |  "top 5" → 5
 
-### Date Range — default last 3 years
+### Date Range
+- end_date is **always today** — the system enforces this regardless of what you specify
+- start_date defaults to 3 years ago for screener, 10 years ago for portfolios
+- User says "last 5 years" → set start_date to 5 years ago; end_date stays today
+- User says "2020 to 2023" → start_date=2020-01-01, end_date still forced to today by the system
 
 ---
 
@@ -115,7 +119,8 @@ Call at most once before `construct_portfolio`.
 Finalise a portfolio. Rules:
 - Real, US-listed tickers only. Never use ^VIX — use VIXY or VXX.
 - Weights can be negative (short) and sum >1.0 (leverage)
-- Default date range: last 10 years | Default rebalance: quarterly | Default benchmark: SPY
+- Default date range: last 10 years to **today** (end_date is always forced to today by the system)
+- Default rebalance: quarterly | Default benchmark: SPY
 - Set `display_config` with appropriate sections and the full markdown narrative
 
 ### Long/Short & Market-Neutral Portfolios
@@ -288,14 +293,16 @@ def _extract_text(content: list) -> str:
 
 
 def _parse_portfolio(inp: dict) -> tuple[PortfolioInput, str, dict]:
-    start, end = _default_dates_portfolio()
+    start, _ = _default_dates_portfolio()
+    # end_date is always today — never trust what the AI or user provides for this
+    today = date.today().strftime("%Y-%m-%d")
     portfolio = PortfolioInput(
         assets=[
             AssetInput(ticker=a["ticker"], weight=a["weight"], rationale=a.get("rationale"))
             for a in inp["assets"]
         ],
         start_date=inp.get("start_date", start),
-        end_date=inp.get("end_date", end),
+        end_date=today,          # hard requirement: always ends today
         rebalance_frequency=inp.get("rebalance_frequency", "quarterly"),
         benchmark=inp.get("benchmark", "SPY"),
         strategy=inp.get("strategy", "custom"),
@@ -304,11 +311,13 @@ def _parse_portfolio(inp: dict) -> tuple[PortfolioInput, str, dict]:
 
 
 def _parse_screen(inp: dict) -> ScreenRequest:
-    start, end = _default_dates_screener()
+    start, _ = _default_dates_screener()
+    # end_date is always today — never trust what the AI or user provides for this
+    today = date.today().strftime("%Y-%m-%d")
     return ScreenRequest(
         tickers=inp["tickers"],
         start_date=inp.get("start_date", start),
-        end_date=inp.get("end_date", end),
+        end_date=today,          # hard requirement: always ends today
         window_freq=inp.get("window_freq", "quarterly"),
         metric=inp.get("metric", "return"),
         top_n=int(inp.get("top_n", 3)),
