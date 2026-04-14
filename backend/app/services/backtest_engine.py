@@ -75,10 +75,16 @@ def run_backtest(
             "Some assets may not have data for the full period — try a shorter date range or different tickers."
         )
 
-    target_weights = pd.Series({t: weights[t] for t in tickers})
+    target_weights = {t: float(weights[t]) for t in tickers}
     rebalance_dates = _get_rebalance_dates(daily_returns.index, rebalance_freq)
 
-    current_weights = target_weights.copy()
+    # Track position values in dollar terms (positive = long, negative = short).
+    # This correctly handles long/short and dollar-neutral portfolios.
+    # The old approach — normalising by weight_sum — fails when weight_sum ≈ 0
+    # (dollar-neutral pair): division by near-zero explodes weights to ±millions,
+    # corrupting both the equity curve and the weight drift chart.
+    portfolio_value = initial_capital
+    position_dollars = {t: portfolio_value * target_weights[t] for t in tickers}
     portfolio_values = [initial_capital]
     weight_records = []
     rebalance_date_strs = []
@@ -86,18 +92,33 @@ def run_backtest(
     for date in daily_returns.index:
         is_rebalance = date in rebalance_dates
         if is_rebalance:
-            current_weights = target_weights.copy()
+            # Reset position sizes to target weights × current portfolio NAV
+            for t in tickers:
+                position_dollars[t] = portfolio_value * target_weights[t]
             rebalance_date_strs.append(date.strftime("%Y-%m-%d"))
 
         day_rets = daily_returns.loc[date]
-        daily_ret = float((current_weights * day_rets).sum())
-        portfolio_values.append(portfolio_values[-1] * (1 + daily_ret))
 
-        new_weights = current_weights * (1 + day_rets)
-        weight_sum = new_weights.sum()
-        current_weights = new_weights / weight_sum if weight_sum != 0 else target_weights.copy()
+        # Portfolio P&L = Σ (position_dollar × asset_return)
+        daily_pnl = sum(position_dollars[t] * float(day_rets[t]) for t in tickers)
+        new_portfolio_value = portfolio_value + daily_pnl
+        portfolio_values.append(new_portfolio_value)
 
-        weight_records.append({"date": date.strftime("%Y-%m-%d"), **current_weights.to_dict()})
+        # Update individual position values
+        for t in tickers:
+            position_dollars[t] *= (1 + float(day_rets[t]))
+
+        portfolio_value = new_portfolio_value
+
+        # Weights for drift chart = position_dollar / portfolio_NAV
+        # For long-only portfolios this equals the familiar drifted weight.
+        # For dollar-neutral pairs it gives sensible ±1.0x values, not ±100x.
+        if abs(portfolio_value) > 1e-10:
+            w_now = {t: position_dollars[t] / portfolio_value for t in tickers}
+        else:
+            w_now = dict(target_weights)
+
+        weight_records.append({"date": date.strftime("%Y-%m-%d"), **w_now})
 
     portfolio_series = pd.Series(portfolio_values[1:], index=daily_returns.index)
     weight_history = pd.DataFrame(weight_records)

@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-04-13 — Fix long/short backtest engine: position-dollar tracking
+
+**What:** Dollar-neutral long/short portfolios (e.g. NVDA +1 / AMD -1) produced absurd results — weight drift chart showed ±6,000,000%, and the equity curve was also wrong.
+
+**Root cause:** The weight drift update in `run_backtest` normalised by `weight_sum = Σ(new_weights)`. For a dollar-neutral pair, `weight_sum ≈ 0` (longs and shorts cancel). Dividing by near-zero inflated weights to ±100x. Those exploded weights were then used for the *next day's return calculation* (`daily_ret = current_weights · day_rets`), so e.g. weights of 102 and -101 were applied to 1% returns giving 1% instead of ~0%, vastly overstating portfolio gains and compounding the error every day.
+
+**Fix:** Replaced the normalise-by-weight-sum approach with explicit position-dollar tracking:
+- `position_dollars[t]` = dollar value of each position (signed: negative = short)
+- `daily_pnl = Σ(position_dollars[t] × ret[t])` → correct portfolio P&L regardless of net weight
+- `portfolio_value` tracked independently as running sum of P&L
+- Drifted weights for the chart = `position_dollars[t] / portfolio_value` → stays in ±1–2x range for pair trades
+
+Verified correct for both long-only (60/40, weights still sum to 1 after drift) and dollar-neutral pairs (weights stay in the ±1x range expected for a pair trade).
+
+**Files modified:** `backend/app/services/backtest_engine.py` — `run_backtest()` function
+
+---
+
 ## 2026-04-13 — Short positions fix + warm universe cache + manual builder UX
 
 **What:** Three improvements in one commit.
