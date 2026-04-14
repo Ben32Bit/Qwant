@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-04-13 — Short positions fix + warm universe cache + manual builder UX
+
+**What:** Three improvements in one commit.
+
+**1. Fix: AI never producing negative weights for long/short requests**
+Root cause: the unified AI system prompt acknowledged that weights *can* be negative but gave no guidance on *when* to use them. Claude defaulted to all-positive weights even when the user asked for "long short pairs", "pair trade", "market neutral", etc.
+Fix: added an explicit `### Long/Short & Market-Neutral Portfolios` section to `UNIFIED_SYSTEM_PROMPT` in `unified_ai.py` that covers:
+- When to trigger (signal phrases: "long short", "pair trade", "market neutral", "long X short Y", "hedge with")
+- Exact negative weight requirement with examples (e.g. long AAPL +1.0, short QQQ -1.0)
+- Dollar-neutral, 130/30, and market-neutral construction patterns
+- Recommended `daily` rebalance for pair trades to maintain dollar-neutral exposure
+
+**2. Warm universe pre-cache on startup**
+Added a background startup task in `main.py` that pre-fetches 10 years of daily prices for 50 tickers (32 ETFs + 20 high-volume stocks) into the existing SQLite price store.
+- Fires via `asyncio.create_task(_warm_price_cache())` inside the `lifespan` context — non-blocking, app serves requests while cache fills.
+- Subsequent restarts are nearly free (SQLite L2 hit for all covered tickers/dates).
+- Estimated storage: ~8 MB total.
+- Screener universe guide in `unified_ai.py` updated to note which tickers are pre-cached, so Claude prefers them for fast response.
+
+**3. Manual builder: visual short position indicators**
+- Weight column header now shows `(−=short)` hint so users know negative values work.
+- Rows with negative weight render with a red border and red weight text, making shorts visually distinct from longs.
+
+**Files modified:**
+- `backend/app/services/unified_ai.py` — long/short system prompt section + updated screener universe guide
+- `backend/app/main.py` — added `WARM_UNIVERSE` list + `_warm_price_cache()` background task
+- `frontend/src/components/Chat/ManualBuilderPanel.jsx` — weight header hint + short row styling
+
+---
+
 ## 2026-04-14 — Fix event-loop blocking causing "Request failed" on production
 
 **What:** All API routes (`/api/unified/chat`, `/api/screen/*`, `/api/backtest`) were calling blocking synchronous functions (Anthropic SDK, yfinance, pandas) directly from async FastAPI handlers. This blocks uvicorn's event loop for the full duration of the request (8–15s per request). Under load or on cold start, Railway's proxy hits its timeout and returns a non-JSON HTML error page. The frontend's `res.json()` then throws, falling back to the "Request failed" message.

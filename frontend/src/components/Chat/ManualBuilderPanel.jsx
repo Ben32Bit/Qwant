@@ -434,29 +434,35 @@ export default function ManualBuilderPanel({ onResult, loading, setLoading, aiPo
             color: 'var(--text-secondary)',
           }}>
             <span>Ticker</span>
-            <span>Weight</span>
+            <span>Weight <span style={{ fontWeight: 400, opacity: 0.65 }}>(−=short)</span></span>
             <span />
           </div>
 
-          {rows.map((row, i) => (
-            <div key={i} className="grid gap-2 items-center" style={{ gridTemplateColumns: '1fr 100px 28px' }}>
-              <input
-                value={row.ticker}
-                onChange={e => updateRow(i, 'ticker', e.target.value.toUpperCase())}
-                placeholder="AAPL"
-                className="mono text-sm px-3 py-2"
-                style={inputStyle()}
-              />
-              <input
-                value={row.weight}
-                onChange={e => updateRow(i, 'weight', e.target.value)}
-                placeholder="0.60"
-                className="mono text-sm px-3 py-2"
-                style={inputStyle()}
-              />
-              <Btn variant="danger" onClick={() => removeRow(i)}>×</Btn>
-            </div>
-          ))}
+          {rows.map((row, i) => {
+            const isShort = parseFloat(row.weight) < 0
+            return (
+              <div key={i} className="grid gap-2 items-center" style={{ gridTemplateColumns: '1fr 100px 28px' }}>
+                <input
+                  value={row.ticker}
+                  onChange={e => updateRow(i, 'ticker', e.target.value.toUpperCase())}
+                  placeholder="AAPL"
+                  className="mono text-sm px-3 py-2"
+                  style={inputStyle(isShort ? { borderColor: 'rgba(255,71,87,0.4)' } : {})}
+                />
+                <input
+                  value={row.weight}
+                  onChange={e => updateRow(i, 'weight', e.target.value)}
+                  placeholder="0.60"
+                  className="mono text-sm px-3 py-2"
+                  style={inputStyle(isShort ? {
+                    borderColor: 'rgba(255,71,87,0.5)',
+                    color: 'var(--accent-red)',
+                  } : {})}
+                />
+                <Btn variant="danger" onClick={() => removeRow(i)}>×</Btn>
+              </div>
+            )
+          })}
 
           <Btn onClick={addRow} variant="ghost" extraStyle={{ width: '100%', marginTop: 4 }}>
             + Add row

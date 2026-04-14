@@ -1,6 +1,8 @@
 import os
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import date
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -33,11 +35,51 @@ limiter = Limiter(
 )
 
 
+# ── Warm universe ─────────────────────────────────────────────────────────────
+# Top 20 ETFs by AUM + top 20 US stocks by average daily volume.
+# Pre-fetched on startup so screener/portfolio requests hit SQLite instead of yfinance.
+WARM_UNIVERSE = [
+    # Core ETFs
+    "SPY", "QQQ", "IWM", "VTI", "AGG", "BND", "TLT", "IEF", "SHY",
+    "GLD", "SLV", "VNQ", "EFA", "EEM", "VEA", "VWO", "HYG", "LQD",
+    "XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLU", "XLB", "XLI", "XLRE", "XLC",
+    "DBC", "USO", "VIXY",
+    # High-volume US stocks
+    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "AVGO",
+    "NFLX", "AMD", "ORCL", "CRM", "ADBE", "INTC", "QCOM",
+    "JPM", "BAC", "GS", "V", "MA",
+]
+
+
+async def _warm_price_cache() -> None:
+    """
+    Background task: fetch 10 years of daily prices for the warm universe into SQLite.
+    Runs once on startup; subsequent restarts are nearly free (SQLite L2 hit).
+    Estimated storage: ~8 MB total for 50 tickers × 2,520 trading days.
+    """
+    from app.services.data_service import fetch_prices
+
+    end_str = date.today().strftime("%Y-%m-%d")
+    start_str = date(date.today().year - 10, date.today().month, date.today().day).strftime("%Y-%m-%d")
+
+    logger.info("Warm-cache: fetching %d tickers from %s → %s", len(WARM_UNIVERSE), start_str, end_str)
+    try:
+        # Run in a thread so we don't block the event loop
+        await asyncio.to_thread(fetch_prices, WARM_UNIVERSE, start_str, end_str)
+        logger.info("Warm-cache: complete.")
+    except Exception as exc:
+        # Non-fatal — the app still works, just without the warm cache
+        logger.warning("Warm-cache: failed (non-fatal): %s", exc)
+
+
 # ── Startup / shutdown ────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up — initialising price store…")
     init_db()
+    # Fire-and-forget: warm the price cache in the background.
+    # Does not block startup; app serves requests while cache fills.
+    asyncio.create_task(_warm_price_cache())
     yield
     logger.info("Shutting down.")
 

@@ -81,13 +81,16 @@ Call this ONCE. Pick all parameters directly from the request.
 - "momentum / recent trend" → metric="momentum_3m"
 
 ### Universe Guide
+These tickers are pre-cached for fast response — prefer them when the user doesn't specify:
 - "sectors / sector ETFs" → XLK, XLF, XLE, XLV, XLY, XLP, XLU, XLB, XLI, XLRE, XLC
-- "mega-cap tech / FAANG" → META, AAPL, AMZN, NFLX, GOOGL (add MSFT, NVDA for broader tech)
-- "global / international" → VTI, EFA, EEM, VEA, VWO, EWJ, EWZ, FXI
+- "mega-cap tech / FAANG" → META, AAPL, AMZN, NFLX, GOOGL, MSFT, NVDA, AVGO
+- "global / international" → VTI, EFA, EEM, VEA, VWO
 - "asset classes" → SPY, TLT, GLD, VNQ, DBC, HYG, EEM
 - "bonds" → TLT, IEF, SHY, LQD, HYG, AGG, BND
-- "commodities" → GLD, SLV, USO, DBC, CPER
-- Explicit tickers → use exactly those
+- "commodities" → GLD, SLV, USO, DBC
+- "large-cap stocks" → AAPL, MSFT, NVDA, AMZN, META, GOOGL, TSLA, AVGO, NFLX, AMD, ORCL, CRM
+- "financials" → JPM, BAC, GS, V, MA
+- Explicit tickers → use exactly those (even if outside the pre-cached set)
 
 ### Window Frequency — default "quarterly"
 - "quarterly / each quarter" → "quarterly"
@@ -114,6 +117,16 @@ Finalise a portfolio. Rules:
 - Weights can be negative (short) and sum >1.0 (leverage)
 - Default date range: last 10 years | Default rebalance: quarterly | Default benchmark: SPY
 - Set `display_config` with appropriate sections and the full markdown narrative
+
+### Long/Short & Market-Neutral Portfolios
+When the user says "long short", "pair trade", "market neutral", "long X short Y", "hedge with", "pairs strategy", "short the market", or any combination implying a short:
+- **You MUST use negative weights for shorted assets.** Never substitute a reduced positive weight.
+- Dollar-neutral pair (equal notional long/short): long weight = +1.0, short weight = -1.0
+- Example — long AAPL, short QQQ: `[{"ticker": "AAPL", "weight": 1.0}, {"ticker": "QQQ", "weight": -1.0}]`
+- 130/30 style: longs sum to ~1.3, shorts sum to ~-0.3
+- Market neutral: longs and shorts balance so net weight ≈ 0
+- Gross leverage = sum of absolute weights (e.g., 1.0 long + 1.0 short = 2.0x gross)
+- For pair trades, use daily rebalance_frequency to keep dollar-neutral exposure consistent
 
 ### display_config.sections
 Always include: equity_curve, drawdown, metrics_summary, ff5_decomposition. Add:
