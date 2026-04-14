@@ -8,9 +8,9 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
+  ReferenceLine,
 } from 'recharts'
 import { CHART_COLORS, AXIS_STYLE, TOOLTIP_STYLE, GRID_STYLE } from '../../utils/chartConfig.js'
-import { fmtDollar } from '../../utils/formatters.js'
 
 // ── Inject slider thumb styles once ──────────────────────────────────────────
 // (can't set ::-webkit-slider-thumb via inline styles)
@@ -93,13 +93,18 @@ function CustomTooltip({ active, payload, label }) {
       <div className="mono text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>
         {label}
       </div>
-      {payload.map((p) => (
-        <div key={p.dataKey} className="mono text-sm flex items-center gap-2">
-          <span style={{ color: p.color }}>■</span>
-          <span style={{ color: 'var(--text-secondary)' }}>{p.name}:</span>
-          <span style={{ color: p.color }}>{fmtDollar(p.value, 2)}</span>
-        </div>
-      ))}
+      {payload.map((p) => {
+        const sign = p.value >= 0 ? '+' : ''
+        return (
+          <div key={p.dataKey} className="mono text-sm flex items-center gap-2">
+            <span style={{ color: p.color }}>■</span>
+            <span style={{ color: 'var(--text-secondary)' }}>{p.name}:</span>
+            <span style={{ color: p.value >= 0 ? p.color : 'var(--accent-red)' }}>
+              {sign}{p.value?.toFixed(2)}%
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -119,7 +124,6 @@ function formatDuration(startDate, endDate) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loading, onRangeChange }) {
-  const [logScale, setLogScale] = useState(false)
   const [currency, setCurrency]  = useState('USD')
   const [startIdx, setStartIdx]  = useState(0)
   const [endIdx, setEndIdx]      = useState(0)   // 0 = uninitialised; set in effect below
@@ -182,9 +186,23 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
 
   if (!equityCurve) return null
 
-  // Slice to selected range for the chart display
-  const sliced  = fullData.slice(startIdx, endIdx + 1)
+  // Slice to selected range
+  const sliced     = fullData.slice(startIdx, endIdx + 1)
   const isSubRange = startIdx > 0 || endIdx < maxIdx
+
+  // Rebase to % return from the start of the selected window.
+  // Both portfolio and benchmark start at 0% so comparison is always fair
+  // regardless of which date the slider is set to.
+  const displayData = useMemo(() => {
+    if (!sliced.length) return []
+    const basePort = sliced[0].Portfolio ?? 1
+    const baseBm   = sliced.find(pt => pt.Benchmark != null)?.Benchmark ?? 1
+    return sliced.map(pt => ({
+      date:      pt.date,
+      Portfolio: pt.Portfolio != null ? (pt.Portfolio / basePort - 1) * 100 : undefined,
+      Benchmark: pt.Benchmark != null ? (pt.Benchmark / baseBm  - 1) * 100 : undefined,
+    }))
+  }, [startIdx, endIdx, fullData])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const startDate   = fullData[startIdx]?.date ?? ''
   const endDate     = fullData[endIdx]?.date ?? ''
@@ -193,7 +211,7 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
   // X-axis tick labels (sample ~8)
   const tickCount = 8
   const tickDates = Array.from({ length: tickCount }, (_, i) =>
-    sliced[Math.floor((i / (tickCount - 1)) * Math.max(sliced.length - 1, 0))]?.date
+    displayData[Math.floor((i / (tickCount - 1)) * Math.max(displayData.length - 1, 0))]?.date
   ).filter(Boolean)
 
   return (
@@ -204,9 +222,12 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
       {/* Header row */}
       <div className="flex items-center justify-between mb-3">
         <h3 className="mono font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
-          Equity Curve
+          Returns
+          <span className="ml-2 text-xs font-normal" style={{ color: 'var(--text-secondary)' }}>
+            · from {startDate?.slice(0, 7)}
+          </span>
           {currency !== 'USD' && (
-            <span className="ml-2 text-xs font-normal" style={{ color: 'var(--accent-yellow)' }}>
+            <span className="ml-1 text-xs font-normal" style={{ color: 'var(--accent-yellow)' }}>
               · {currency}-adjusted
             </span>
           )}
@@ -229,23 +250,12 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
               ))}
             </select>
           )}
-          <button
-            onClick={() => setLogScale(v => !v)}
-            className="mono text-xs px-2 py-1 rounded border"
-            style={{
-              borderColor: logScale ? 'var(--accent-blue)' : 'var(--border)',
-              color:       logScale ? 'var(--accent-blue)' : 'var(--text-secondary)',
-              background: 'transparent',
-            }}
-          >
-            {logScale ? 'LOG' : 'LINEAR'}
-          </button>
         </div>
       </div>
 
       {/* Chart */}
       <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={sliced} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
+        <LineChart data={displayData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
           <CartesianGrid {...GRID_STYLE} />
           <XAxis
             dataKey="date"
@@ -256,13 +266,12 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
             tickFormatter={d => d?.slice(0, 7)}
           />
           <YAxis
-            scale={logScale ? 'log' : 'auto'}
-            domain={logScale ? ['auto', 'auto'] : ['auto', 'auto']}
             tick={AXIS_STYLE.tick}
             axisLine={AXIS_STYLE.axisLine}
             tickLine={AXIS_STYLE.tickLine}
-            tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
+            tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`}
           />
+          <ReferenceLine y={0} stroke="var(--border)" strokeWidth={1} />
           <Tooltip content={<CustomTooltip />} />
           <Legend wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: 'var(--text-secondary)' }} />
           <Line type="monotone" dataKey="Portfolio"  stroke={CHART_COLORS.portfolio}  dot={false} strokeWidth={2} isAnimationActive={false} />
