@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import EquityCurve from './EquityCurve.jsx'
 import RotationEquityChart from './RotationEquityChart.jsx'
 import DrawdownChart from './DrawdownChart.jsx'
@@ -11,6 +11,9 @@ import WeightDriftChart from './WeightDriftChart.jsx'
 import FamaFrenchFactors from './FamaFrenchFactors.jsx'
 import { fmtPct, fmtRatio, colorClass } from '../../utils/formatters.js'
 import { exportToExcel } from '../../utils/exportExcel.js'
+import { computeMetricsFromCurves, computeDrawdownFromCurve } from '../../utils/computeMetrics.js'
+
+const RISK_FREE_RATE = 0.05
 
 // ── Featured metrics strip ────────────────────────────────────────────────────
 const METRIC_LABELS = {
@@ -55,6 +58,25 @@ function FeaturedMetrics({ metrics, featuredKeys }) {
   )
 }
 
+// ── Sub-period indicator ──────────────────────────────────────────────────────
+function PeriodBadge({ startDate, endDate, fullStart, fullEnd }) {
+  if (!startDate || startDate === fullStart && endDate === fullEnd) return null
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-2 rounded-lg mono text-xs"
+      style={{
+        background: 'rgba(74,158,255,0.07)',
+        border: '1px solid rgba(74,158,255,0.25)',
+        color: 'var(--accent-blue)',
+      }}
+    >
+      <span style={{ opacity: 0.7 }}>Metrics for selected period:</span>
+      <span className="font-bold">{startDate?.slice(0, 7)} → {endDate?.slice(0, 7)}</span>
+      <span style={{ opacity: 0.6 }}>· Approximate client-side recalculation</span>
+    </div>
+  )
+}
+
 // ── Empty state ───────────────────────────────────────────────────────────────
 function EmptyState() {
   return (
@@ -80,11 +102,83 @@ function EmptyState() {
 export default function ResultsPanel({ backtest, portfolio, displayConfig, loading }) {
   const isEmpty = !backtest && !loading
 
+  // ── Range slider state ────────────────────────────────────────────────────
+  const [rangeStart, setRangeStart] = useState(null)
+  const [rangeEnd,   setRangeEnd]   = useState(null)
+
+  const onRangeChange = useCallback((startDate, endDate) => {
+    setRangeStart(startDate)
+    setRangeEnd(endDate)
+  }, [])
+
+  // Full period dates (from equity curve)
+  const fullStart = backtest?.equity_curve?.[0]?.date ?? null
+  const fullEnd   = backtest?.equity_curve?.at(-1)?.date ?? null
+
+  // Are we in sub-range mode?
+  const isSubRange = !!(rangeStart && rangeEnd &&
+    (rangeStart !== fullStart || rangeEnd !== fullEnd))
+
+  // ── Filtered equity curve (used for metric recalculation) ─────────────────
+  const slicedEquity = useMemo(() => {
+    if (!isSubRange || !backtest?.equity_curve) return backtest?.equity_curve ?? null
+    return backtest.equity_curve.filter(pt => pt.date >= rangeStart && pt.date <= rangeEnd)
+  }, [isSubRange, backtest?.equity_curve, rangeStart, rangeEnd])
+
+  const slicedBenchmark = useMemo(() => {
+    if (!isSubRange || !backtest?.benchmark_curve) return backtest?.benchmark_curve ?? null
+    return backtest.benchmark_curve.filter(pt => pt.date >= rangeStart && pt.date <= rangeEnd)
+  }, [isSubRange, backtest?.benchmark_curve, rangeStart, rangeEnd])
+
+  // ── Recomputed metrics ────────────────────────────────────────────────────
+  const activeMetrics = useMemo(() => {
+    if (!isSubRange) return backtest?.metrics ?? null
+    if (!slicedEquity?.length) return backtest?.metrics ?? null
+    return computeMetricsFromCurves(slicedEquity, slicedBenchmark, RISK_FREE_RATE)
+      ?? backtest?.metrics ?? null
+  }, [isSubRange, slicedEquity, slicedBenchmark, backtest?.metrics])
+
+  // ── Recomputed drawdown series ────────────────────────────────────────────
+  const activeDrawdown = useMemo(() => {
+    if (!isSubRange) return backtest?.drawdown_series ?? null
+    if (!slicedEquity?.length) return backtest?.drawdown_series ?? null
+    return computeDrawdownFromCurve(slicedEquity)
+  }, [isSubRange, slicedEquity, backtest?.drawdown_series])
+
+  // ── Filtered rolling metrics ──────────────────────────────────────────────
+  const activeRolling = useMemo(() => {
+    if (!isSubRange || !backtest?.rolling_metrics) return backtest?.rolling_metrics ?? null
+    const rm = backtest.rolling_metrics
+    const filter = (arr) => arr?.filter(pt => pt.date >= rangeStart && pt.date <= rangeEnd) ?? []
+    return { sharpe: filter(rm.sharpe), volatility: filter(rm.volatility), beta: filter(rm.beta) }
+  }, [isSubRange, backtest?.rolling_metrics, rangeStart, rangeEnd])
+
+  // ── Filtered monthly returns ──────────────────────────────────────────────
+  const activeMonthly = useMemo(() => {
+    if (!isSubRange || !backtest?.monthly_returns?.data) return backtest?.monthly_returns ?? null
+    const startYM = rangeStart?.slice(0, 7) ?? ''
+    const endYM   = rangeEnd?.slice(0, 7)   ?? '9999-12'
+    const MONTHS  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+    const filtered = {}
+    for (const [year, months] of Object.entries(backtest.monthly_returns.data)) {
+      if (year < startYM.slice(0, 4) || year > endYM.slice(0, 4)) continue
+      const filteredMonths = {}
+      for (const [month, val] of Object.entries(months)) {
+        const mIdx = MONTHS.indexOf(month) + 1
+        const ym   = `${year}-${String(mIdx).padStart(2, '0')}`
+        if (ym >= startYM && ym <= endYM) filteredMonths[month] = val
+      }
+      if (Object.keys(filteredMonths).length > 0) filtered[year] = filteredMonths
+    }
+    return { data: filtered }
+  }, [isSubRange, backtest?.monthly_returns, rangeStart, rangeEnd])
+
+  // ── Section list ──────────────────────────────────────────────────────────
   const sections = useMemo(() => {
     const raw = displayConfig?.sections?.length
       ? displayConfig.sections
       : ['equity_curve', 'drawdown', 'metrics_summary']
-    // If both summary and full are present, keep only full_metrics (superset)
     if (raw.includes('full_metrics') && raw.includes('metrics_summary')) {
       return raw.filter(s => s !== 'metrics_summary')
     }
@@ -112,17 +206,9 @@ export default function ResultsPanel({ backtest, portfolio, displayConfig, loadi
             <button
               onClick={() => exportToExcel(backtest, portfolio)}
               className="mono text-xs px-3 py-2 rounded border transition-colors whitespace-nowrap"
-              style={{
-                borderColor: 'var(--accent-green)',
-                color: 'var(--accent-green)',
-                background: 'transparent',
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.background = 'rgba(0,200,83,0.1)'
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.background = 'transparent'
-              }}
+              style={{ borderColor: 'var(--accent-green)', color: 'var(--accent-green)', background: 'transparent' }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,200,83,0.1)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
             >
               ↓ Export Excel
             </button>
@@ -132,16 +218,21 @@ export default function ResultsPanel({ backtest, portfolio, displayConfig, loadi
         {/* AI Narrative */}
         {displayConfig?.narrative && <AiNarrative narrative={displayConfig.narrative} />}
 
-        {/* Featured metrics strip — shown whenever display_config.featured_metrics is set */}
+        {/* Featured metrics strip */}
         {displayConfig?.featured_metrics?.length > 0 && (
-          <FeaturedMetrics metrics={backtest?.metrics} featuredKeys={displayConfig.featured_metrics} />
+          <FeaturedMetrics metrics={activeMetrics} featuredKeys={displayConfig.featured_metrics} />
+        )}
+
+        {/* Sub-period badge */}
+        {isSubRange && (
+          <PeriodBadge startDate={rangeStart} endDate={rangeEnd} fullStart={fullStart} fullEnd={fullEnd} />
         )}
 
         {/* Dynamic sections in AI-chosen order */}
         {sections.map(section => {
           switch (section) {
+
             case 'equity_curve':
-              // Use rotation chart when holding_schedule is present (rotation backtest)
               return backtest?.holding_schedule?.length ? (
                 <RotationEquityChart key="equity_curve"
                   equityCurve={backtest.equity_curve}
@@ -154,38 +245,44 @@ export default function ResultsPanel({ backtest, portfolio, displayConfig, loadi
                   benchmarkCurve={backtest?.benchmark_curve}
                   fxCurves={backtest?.fx_curves}
                   loading={loading}
+                  onRangeChange={onRangeChange}
                 />
               )
+
             case 'drawdown':
               return (
                 <DrawdownChart key="drawdown"
-                  drawdownSeries={backtest?.drawdown_series}
+                  drawdownSeries={activeDrawdown}
                   loading={loading}
                 />
               )
+
             case 'metrics_summary':
               return (
                 <MetricsCards key="metrics_summary"
-                  metrics={backtest?.metrics}
+                  metrics={activeMetrics}
                   loading={loading}
                   mode="summary"
                 />
               )
+
             case 'full_metrics':
               return (
                 <MetricsCards key="full_metrics"
-                  metrics={backtest?.metrics}
+                  metrics={activeMetrics}
                   loading={loading}
                   mode="full"
                 />
               )
+
             case 'monthly_heatmap':
               return (
                 <MonthlyHeatmap key="monthly_heatmap"
-                  monthlyReturns={backtest?.monthly_returns}
+                  monthlyReturns={activeMonthly}
                   loading={loading}
                 />
               )
+
             case 'correlation_matrix':
               return (
                 <CorrelationMatrix key="correlation_matrix"
@@ -193,14 +290,16 @@ export default function ResultsPanel({ backtest, portfolio, displayConfig, loadi
                   loading={loading}
                 />
               )
+
             case 'rolling_metrics':
               return (
                 <RollingMetrics key="rolling_metrics"
-                  rollingMetrics={backtest?.rolling_metrics}
+                  rollingMetrics={activeRolling}
                   hasBenchmark={hasBenchmark}
                   loading={loading}
                 />
               )
+
             case 'weight_drift':
               return (
                 <WeightDriftChart key="weight_drift"
@@ -209,6 +308,7 @@ export default function ResultsPanel({ backtest, portfolio, displayConfig, loadi
                   loading={loading}
                 />
               )
+
             case 'ff5_decomposition':
               return (
                 <FamaFrenchFactors key="ff5_decomposition"
@@ -216,6 +316,7 @@ export default function ResultsPanel({ backtest, portfolio, displayConfig, loadi
                   loading={loading}
                 />
               )
+
             default:
               return null
           }

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
 import {
   ResponsiveContainer,
   LineChart,
@@ -10,8 +10,82 @@ import {
   Legend,
 } from 'recharts'
 import { CHART_COLORS, AXIS_STYLE, TOOLTIP_STYLE, GRID_STYLE } from '../../utils/chartConfig.js'
-import { fmtDollar, fmtDate } from '../../utils/formatters.js'
+import { fmtDollar } from '../../utils/formatters.js'
 
+// ── Inject slider thumb styles once ──────────────────────────────────────────
+// (can't set ::-webkit-slider-thumb via inline styles)
+function useSliderStyles() {
+  useEffect(() => {
+    if (document.getElementById('qw-range-slider-styles')) return
+    const el = document.createElement('style')
+    el.id = 'qw-range-slider-styles'
+    el.textContent = `
+      .qw-rslider { position: relative; height: 20px; }
+      .qw-rslider input[type=range] {
+        -webkit-appearance: none; appearance: none;
+        position: absolute; width: 100%; top: 0; height: 100%;
+        background: transparent; pointer-events: none; margin: 0;
+      }
+      .qw-rslider input[type=range]:focus { outline: none; }
+      .qw-rslider input[type=range]::-webkit-slider-runnable-track { background: transparent; }
+      .qw-rslider input[type=range]::-webkit-slider-thumb {
+        -webkit-appearance: none; width: 13px; height: 13px;
+        border-radius: 50%; background: #4a9eff;
+        pointer-events: auto; cursor: pointer;
+        border: 2px solid #0a0a0f; box-shadow: 0 0 0 1px #4a9eff;
+        margin-top: 0;
+      }
+      .qw-rslider input[type=range]::-moz-range-thumb {
+        width: 13px; height: 13px;
+        border-radius: 50%; background: #4a9eff;
+        pointer-events: auto; cursor: pointer;
+        border: 2px solid #0a0a0f; box-shadow: 0 0 0 1px #4a9eff;
+      }
+    `
+    document.head.appendChild(el)
+  }, [])
+}
+
+// ── Dual-thumb range slider ───────────────────────────────────────────────────
+function DualRangeSlider({ max, startIdx, endIdx, onStartChange, onEndChange }) {
+  useSliderStyles()
+
+  const startPct = max > 0 ? (startIdx / max) * 100 : 0
+  const endPct   = max > 0 ? (endIdx   / max) * 100 : 100
+
+  return (
+    <div className="qw-rslider">
+      {/* Background track */}
+      <div style={{
+        position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+        left: 0, right: 0, height: 3,
+        background: 'var(--border)', borderRadius: 2, pointerEvents: 'none',
+      }} />
+      {/* Selected fill */}
+      <div style={{
+        position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+        left: `${startPct}%`, width: `${endPct - startPct}%`, height: 3,
+        background: 'var(--accent-blue)', borderRadius: 2, pointerEvents: 'none',
+      }} />
+      {/* Start thumb */}
+      <input
+        type="range"
+        min={0} max={max} value={startIdx}
+        style={{ zIndex: 2 }}
+        onChange={e => onStartChange(Math.min(Number(e.target.value), endIdx - 1))}
+      />
+      {/* End thumb (higher z-index so it wins when both overlap) */}
+      <input
+        type="range"
+        min={0} max={max} value={endIdx}
+        style={{ zIndex: 3 }}
+        onChange={e => onEndChange(Math.max(Number(e.target.value), startIdx + 1))}
+      />
+    </div>
+  )
+}
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
 function CustomTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
   return (
@@ -32,9 +106,23 @@ function CustomTooltip({ active, payload, label }) {
 
 const FX_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD', 'SGD', 'HKD', 'CNH']
 
-export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loading }) {
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function formatDuration(startDate, endDate) {
+  if (!startDate || !endDate) return ''
+  const ms    = new Date(endDate) - new Date(startDate)
+  const years = ms / (365.25 * 86_400_000)
+  if (years >= 2) return `${years.toFixed(1)}Y`
+  const months = Math.round(years * 12)
+  if (months >= 2) return `${months}M`
+  return `${Math.round(ms / 86_400_000)}D`
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loading, onRangeChange }) {
   const [logScale, setLogScale] = useState(false)
-  const [currency, setCurrency] = useState('USD')
+  const [currency, setCurrency]  = useState('USD')
+  const [startIdx, setStartIdx]  = useState(0)
+  const [endIdx, setEndIdx]      = useState(0)   // 0 = uninitialised; set in effect below
 
   // Use FX-adjusted curve when a non-USD currency is selected
   const activeCurve = useMemo(() => {
@@ -42,9 +130,9 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
     return fxCurves[currency]
   }, [currency, equityCurve, fxCurves])
 
-  const data = useMemo(() => {
+  // Build the full merged data array (portfolio + benchmark, indexed by date)
+  const fullData = useMemo(() => {
     if (!activeCurve) return []
-    // Build a date→benchmark map for fast lookup (benchmark stays in USD)
     const bmMap = {}
     if (currency === 'USD' && benchmarkCurve) {
       benchmarkCurve.forEach(pt => { bmMap[pt.date] = pt.value })
@@ -56,11 +144,36 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
     }))
   }, [activeCurve, benchmarkCurve, currency])
 
+  const maxIdx = Math.max(0, fullData.length - 1)
+
+  // Reset slider to full range whenever the data source changes
+  useEffect(() => {
+    setStartIdx(0)
+    setEndIdx(maxIdx)
+    if (onRangeChange && fullData.length > 0) {
+      onRangeChange(fullData[0].date, fullData[maxIdx]?.date ?? fullData[0].date)
+    }
+  }, [maxIdx, fullData[0]?.date])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Report range to parent when slider moves
+  const handleStartChange = (v) => {
+    setStartIdx(v)
+    if (onRangeChange && fullData[v] && fullData[endIdx]) {
+      onRangeChange(fullData[v].date, fullData[endIdx].date)
+    }
+  }
+  const handleEndChange = (v) => {
+    setEndIdx(v)
+    if (onRangeChange && fullData[startIdx] && fullData[v]) {
+      onRangeChange(fullData[startIdx].date, fullData[v].date)
+    }
+  }
+
   const hasFx = fxCurves && Object.keys(fxCurves).length > 0
 
   if (loading) {
     return (
-      <div className="rounded-lg border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', height: 280 }}>
+      <div className="rounded-lg border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', height: 320 }}>
         <div className="skeleton h-4 w-32 mb-4" />
         <div className="skeleton h-full w-full rounded" style={{ height: 220 }} />
       </div>
@@ -69,23 +182,27 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
 
   if (!equityCurve) return null
 
-  // Thin out data to max ~500 points for performance
-  const step = Math.max(1, Math.floor(data.length / 500))
-  const thinned = data.filter((_, i) => i % step === 0 || i === data.length - 1)
+  // Slice to selected range for the chart display
+  const sliced  = fullData.slice(startIdx, endIdx + 1)
+  const isSubRange = startIdx > 0 || endIdx < maxIdx
 
-  // Sample x-axis labels (show ~8)
+  const startDate   = fullData[startIdx]?.date ?? ''
+  const endDate     = fullData[endIdx]?.date ?? ''
+  const duration    = formatDuration(startDate, endDate)
+
+  // X-axis tick labels (sample ~8)
   const tickCount = 8
-  const tickIndices = Array.from({ length: tickCount }, (_, i) =>
-    Math.floor((i / (tickCount - 1)) * (thinned.length - 1))
-  )
-  const tickDates = tickIndices.map((i) => thinned[i]?.date)
+  const tickDates = Array.from({ length: tickCount }, (_, i) =>
+    sliced[Math.floor((i / (tickCount - 1)) * Math.max(sliced.length - 1, 0))]?.date
+  ).filter(Boolean)
 
   return (
     <div
       className="rounded-lg border p-4"
       style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}
     >
-      <div className="flex items-center justify-between mb-4">
+      {/* Header row */}
+      <div className="flex items-center justify-between mb-3">
         <h3 className="mono font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
           Equity Curve
           {currency !== 'USD' && (
@@ -113,11 +230,11 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
             </select>
           )}
           <button
-            onClick={() => setLogScale((v) => !v)}
+            onClick={() => setLogScale(v => !v)}
             className="mono text-xs px-2 py-1 rounded border"
             style={{
               borderColor: logScale ? 'var(--accent-blue)' : 'var(--border)',
-              color: logScale ? 'var(--accent-blue)' : 'var(--text-secondary)',
+              color:       logScale ? 'var(--accent-blue)' : 'var(--text-secondary)',
               background: 'transparent',
             }}
           >
@@ -126,8 +243,9 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
         </div>
       </div>
 
-      <ResponsiveContainer width="100%" height={240}>
-        <LineChart data={thinned} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
+      {/* Chart */}
+      <ResponsiveContainer width="100%" height={220}>
+        <LineChart data={sliced} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
           <CartesianGrid {...GRID_STYLE} />
           <XAxis
             dataKey="date"
@@ -135,7 +253,7 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
             tick={AXIS_STYLE.tick}
             axisLine={AXIS_STYLE.axisLine}
             tickLine={AXIS_STYLE.tickLine}
-            tickFormatter={(d) => d?.slice(0, 7)}
+            tickFormatter={d => d?.slice(0, 7)}
           />
           <YAxis
             scale={logScale ? 'log' : 'auto'}
@@ -143,31 +261,51 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
             tick={AXIS_STYLE.tick}
             axisLine={AXIS_STYLE.axisLine}
             tickLine={AXIS_STYLE.tickLine}
-            tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+            tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
           />
           <Tooltip content={<CustomTooltip />} />
-          <Legend
-            wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: 'var(--text-secondary)' }}
-          />
-          <Line
-            type="monotone"
-            dataKey="Portfolio"
-            stroke={CHART_COLORS.portfolio}
-            dot={false}
-            strokeWidth={2}
-          />
+          <Legend wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: 'var(--text-secondary)' }} />
+          <Line type="monotone" dataKey="Portfolio"  stroke={CHART_COLORS.portfolio}  dot={false} strokeWidth={2} isAnimationActive={false} />
           {benchmarkCurve && (
-            <Line
-              type="monotone"
-              dataKey="Benchmark"
-              stroke={CHART_COLORS.benchmark}
-              dot={false}
-              strokeWidth={1.5}
-              strokeDasharray="4 4"
-            />
+            <Line type="monotone" dataKey="Benchmark" stroke={CHART_COLORS.benchmark} dot={false} strokeWidth={1.5} strokeDasharray="4 4" isAnimationActive={false} />
           )}
         </LineChart>
       </ResponsiveContainer>
+
+      {/* Range slider */}
+      <div className="mt-3 px-1">
+        <DualRangeSlider
+          max={maxIdx}
+          startIdx={startIdx}
+          endIdx={endIdx}
+          onStartChange={handleStartChange}
+          onEndChange={handleEndChange}
+        />
+
+        {/* Date labels row */}
+        <div className="flex items-center justify-between mt-1.5">
+          <span className="mono text-xs" style={{ color: isSubRange ? 'var(--accent-blue)' : 'var(--text-secondary)' }}>
+            {startDate?.slice(0, 7)}
+          </span>
+          <div className="flex items-center gap-2">
+            <span className="mono text-xs" style={{ color: 'var(--text-secondary)' }}>
+              {duration}
+            </span>
+            {isSubRange && (
+              <button
+                onClick={() => { handleStartChange(0); handleEndChange(maxIdx) }}
+                className="mono text-xs px-1.5 py-0.5 rounded"
+                style={{ background: 'rgba(74,158,255,0.1)', color: 'var(--accent-blue)', border: '1px solid rgba(74,158,255,0.3)' }}
+              >
+                Reset
+              </button>
+            )}
+          </div>
+          <span className="mono text-xs" style={{ color: isSubRange ? 'var(--accent-blue)' : 'var(--text-secondary)' }}>
+            {endDate?.slice(0, 7)}
+          </span>
+        </div>
+      </div>
     </div>
   )
 }
