@@ -123,6 +123,18 @@ export default function RotationEquityChart({ equityCurve, benchmarkCurve, holdi
     }))
   }, [equityCurve, benchmarkCurve])
 
+  // X-axis ticks: one per year boundary
+  // MUST be declared before any early returns to satisfy Rules of Hooks.
+  const xTicks = useMemo(() => {
+    const years = new Set()
+    return chartData.filter(p => {
+      const yr = p.date?.slice(0, 4)
+      if (!yr || years.has(yr)) return false
+      years.add(yr)
+      return true
+    }).map(p => p.date)
+  }, [chartData])
+
   if (!chartData.length) return null
 
   const firstDate = chartData[0].date
@@ -137,17 +149,6 @@ export default function RotationEquityChart({ equityCurve, benchmarkCurve, holdi
 
   // Format x-axis: show year only to keep it sparse
   const xTick = (val) => val?.slice(0, 4) ?? ''
-
-  // X-axis ticks: one per year boundary
-  const xTicks = useMemo(() => {
-    const years = new Set()
-    return chartData.filter(p => {
-      const yr = p.date?.slice(0, 4)
-      if (!yr || years.has(yr)) return false
-      years.add(yr)
-      return true
-    }).map(p => p.date)
-  }, [chartData])
 
   return (
     <div

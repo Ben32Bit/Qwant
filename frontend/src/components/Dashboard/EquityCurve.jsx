@@ -175,6 +175,20 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
 
   const hasFx = fxCurves && Object.keys(fxCurves).length > 0
 
+  // Rebase to % return from the start of the selected window.
+  // MUST be declared before any early returns to satisfy Rules of Hooks.
+  const displayData = useMemo(() => {
+    const sliced = fullData.slice(startIdx, endIdx + 1)
+    if (!sliced.length) return []
+    const basePort = sliced[0].Portfolio ?? 1
+    const baseBm   = sliced.find(pt => pt.Benchmark != null)?.Benchmark ?? 1
+    return sliced.map(pt => ({
+      date:      pt.date,
+      Portfolio: pt.Portfolio != null ? (pt.Portfolio / basePort - 1) * 100 : undefined,
+      Benchmark: pt.Benchmark != null ? (pt.Benchmark / baseBm  - 1) * 100 : undefined,
+    }))
+  }, [startIdx, endIdx, fullData])   // eslint-disable-line react-hooks/exhaustive-deps
+
   if (loading) {
     return (
       <div className="rounded-lg border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', height: 320 }}>
@@ -186,23 +200,7 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
 
   if (!equityCurve) return null
 
-  // Slice to selected range
-  const sliced     = fullData.slice(startIdx, endIdx + 1)
   const isSubRange = startIdx > 0 || endIdx < maxIdx
-
-  // Rebase to % return from the start of the selected window.
-  // Both portfolio and benchmark start at 0% so comparison is always fair
-  // regardless of which date the slider is set to.
-  const displayData = useMemo(() => {
-    if (!sliced.length) return []
-    const basePort = sliced[0].Portfolio ?? 1
-    const baseBm   = sliced.find(pt => pt.Benchmark != null)?.Benchmark ?? 1
-    return sliced.map(pt => ({
-      date:      pt.date,
-      Portfolio: pt.Portfolio != null ? (pt.Portfolio / basePort - 1) * 100 : undefined,
-      Benchmark: pt.Benchmark != null ? (pt.Benchmark / baseBm  - 1) * 100 : undefined,
-    }))
-  }, [startIdx, endIdx, fullData])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const startDate   = fullData[startIdx]?.date ?? ''
   const endDate     = fullData[endIdx]?.date ?? ''
