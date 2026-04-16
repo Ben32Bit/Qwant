@@ -2,6 +2,18 @@
 
 ---
 
+## 2026-04-16 — Fix SplitView crash: remove useEffect hook rule violation
+
+**What:** `SplitView.jsx` crashed at runtime due to a React hook called conditionally inside a render block.
+
+**Root cause:** A `useEffect(() => { if (activeBacktest) setRightTab('results') }, [activeBacktest])` was placed after a conditional computation that used `let` assignments — mixing hook calls with conditional logic violates Rules of Hooks.
+
+**Fix:** Removed the `useEffect` entirely. The `rightTab` persists across backtests (user keeps their tab selection), which is acceptable UX. Refactored right-panel visibility from `showRightTabs` boolean to two explicit `isScreenerView` / `isPortfolioView` derivations, and replaced the ternary chain with parallel `{condition && <JSX/>}` blocks for clarity.
+
+**Files modified:** `frontend/src/components/Layout/SplitView.jsx`
+
+---
+
 ## 2026-04-16 — Predictive Analytics: 6-Method Forecast Tab
 
 **What:** Added a new "Forecast" tab to the right results panel. Clicking it runs 6 research-backed probabilistic forecasting methods on the active portfolio, producing 12-month fan-band charts (p5/p25/p50/p75/p95) for each method.

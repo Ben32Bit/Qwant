@@ -235,24 +235,29 @@ export default function SplitView() {
     setMode('manual')
   }, [screenResult, rotationBacktest, rotationTopN])
 
-  // Determine which backtest/portfolio is active for the right panel
-  const activeBacktest  = mode === 'manual' ? manualBacktest  : backtest
-  const activePortfolio = mode === 'manual' ? manualPortfolio : portfolio
-  const activeDisplay   = mode === 'manual'
-    ? (manualBacktest ? {
-        sections: ['equity_curve', 'drawdown', 'metrics_summary', 'weight_drift', 'monthly_heatmap', 'correlation_matrix'],
-        featured_metrics: ['cagr', 'sharpe', 'max_drawdown', 'volatility'],
-      } : null)
-    : displayConfig
-  const activeLoading   = mode === 'manual' ? manualLoading : aiLoading
+  // ── Right panel content ───────────────────────────────────────────────────
+  // Derive active backtest/portfolio based on which left-panel mode is live.
+  // These are plain variable computations — no hooks — so they're safe to
+  // reference anywhere in the render without dependency-array concerns.
+  let activeBacktest, activePortfolio, activeDisplay, activeLoading
+  if (mode === 'manual') {
+    activeBacktest  = manualBacktest
+    activePortfolio = manualPortfolio
+    activeLoading   = manualLoading
+    activeDisplay   = manualBacktest ? {
+      sections: ['equity_curve', 'drawdown', 'metrics_summary', 'weight_drift', 'monthly_heatmap', 'correlation_matrix'],
+      featured_metrics: ['cagr', 'sharpe', 'max_drawdown', 'volatility'],
+    } : null
+  } else {
+    activeBacktest  = backtest
+    activePortfolio = portfolio
+    activeLoading   = aiLoading
+    activeDisplay   = displayConfig
+  }
 
-  // Show the Results/Forecast tab bar only when a portfolio backtest is present
-  const showRightTabs = !!(activeBacktest || activeLoading) && !screenResult && !rotationLoading
-
-  // Reset to Results tab whenever a new backtest arrives
-  useEffect(() => {
-    if (activeBacktest) setRightTab('results')
-  }, [activeBacktest])
+  // Show the Results/Forecast tab bar only for portfolio backtests
+  const isScreenerView  = !!(screenResult || rotationLoading)
+  const isPortfolioView = !isScreenerView && !!(activeBacktest || activeLoading)
 
   return (
     <div className="flex h-full">
@@ -296,15 +301,13 @@ export default function SplitView() {
       </div>
 
       {/* ── Right panel ──────────────────────────────────────────────────── */}
-      <div
-        className="flex-1 flex flex-col overflow-hidden"
-        style={{ background: 'var(--bg-primary)' }}
-      >
-        {/* Results / Forecast tab bar — visible only when a portfolio backtest is active */}
-        {showRightTabs && (
+      <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
+
+        {/* Results / Forecast tab bar — portfolio view only */}
+        {isPortfolioView && (
           <div
-            className="flex border-b px-2 overflow-x-auto"
-            style={{ borderColor: 'var(--border)', flexShrink: 0, scrollbarWidth: 'none', background: 'var(--bg-secondary)' }}
+            className="flex border-b px-2"
+            style={{ borderColor: 'var(--border)', flexShrink: 0, background: 'var(--bg-secondary)' }}
           >
             {RIGHT_TABS.map(tab => (
               <RightTab
@@ -318,9 +321,9 @@ export default function SplitView() {
           </div>
         )}
 
-        {/* Screener view — no right tabs */}
-        {(screenResult || rotationLoading) ? (
-          <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* ── Screener view ─────────────────────────────────────────────── */}
+        {isScreenerView && (
+          <div className="flex h-full overflow-hidden">
             <div className="flex-1 overflow-hidden border-r" style={{ borderColor: 'var(--border)' }}>
               <ScreenerResults
                 screenResult={screenResult}
@@ -340,9 +343,10 @@ export default function SplitView() {
               </div>
             )}
           </div>
+        )}
 
-        ) : showRightTabs ? (
-          /* Portfolio backtest view — Results or Forecast tab */
+        {/* ── Portfolio view ─────────────────────────────────────────────── */}
+        {isPortfolioView && (
           <div className="flex-1 min-h-0 overflow-hidden">
             {rightTab === 'results' && (
               <ResultsPanel
@@ -359,9 +363,10 @@ export default function SplitView() {
               />
             )}
           </div>
+        )}
 
-        ) : (
-          /* Empty state */
+        {/* ── Empty state ────────────────────────────────────────────────── */}
+        {!isScreenerView && !isPortfolioView && (
           <div className="flex flex-col items-center justify-center h-full text-center px-8">
             <div className="mono text-5xl mb-6 opacity-20 select-none" style={{ color: 'var(--accent-blue)' }}>▷</div>
             <h2 className="mono font-bold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>Results appear here</h2>
@@ -370,6 +375,7 @@ export default function SplitView() {
             </p>
           </div>
         )}
+
       </div>
     </div>
   )
