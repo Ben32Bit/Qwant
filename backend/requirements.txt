@@ -1,3 +1,4 @@
+setuptools>=70.0        # provides pkg_resources; required by statsmodels build on Python 3.12+
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 anthropic==0.40.0
