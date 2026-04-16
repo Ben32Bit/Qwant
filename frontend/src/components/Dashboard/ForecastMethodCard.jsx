@@ -30,6 +30,8 @@ const CITATIONS = {
     'Campbell, J.Y., Chan, Y.L., & Viceira, L.M. (2003). A multivariate model of strategic asset allocation. Journal of Financial Economics, 67(1), 41–80. https://doi.org/10.1016/S0304-405X(02)00231-3',
   ],
   lstm: [
+    'CS230 Stanford (2020). Predicting Stock Market Returns Using Temporal Attention-Enhanced LSTM. Winter 2020 Project Reports. https://cs230.stanford.edu/projects_winter_2020/reports/32066186.pdf',
+    'Bahdanau, D., Cho, K., & Bengio, Y. (2015). Neural machine translation by jointly learning to align and translate. ICLR 2015. https://arxiv.org/abs/1409.0473',
     'Fischer, T. & Krauss, C. (2018). Deep learning with long short-term memory networks for financial market predictions. European Journal of Operational Research, 270(2), 654–669. https://doi.org/10.1016/j.ejor.2017.11.054',
     'Gal, Y. & Ghahramani, Z. (2016). Dropout as a Bayesian approximation: representing model uncertainty in deep learning. Proceedings of ICML 33, 1050–1059. https://proceedings.mlr.press/v48/gal16.html',
   ],
@@ -53,7 +55,7 @@ const METHOD_DESC = {
   hmm:         '2-state Hidden Markov Model (Bull / Bear). Transition probabilities and regime-conditional return distributions estimated via Baum-Welch EM with 10 random initialisations to escape local optima.',
   factor:      'Factor-anchored GBM: expected return derived from Fama-French 5-factor loadings × consensus long-run premia (Damodaran 2024), replacing naive historical mean. Reduces look-ahead bias from short backtests.',
   var:         'Vector Autoregression captures lead-lag cross-asset relationships. Lag order selected by AIC; out-of-sample residual covariance used for simulation to avoid covariance inflation.',
-  lstm:        'LSTM with MC Dropout (Gal & Ghahramani 2016). Chronological 70/15/15 train/val/test split; early stopping on val loss. 200 stochastic forward passes produce Bayesian uncertainty bands.',
+  lstm:        'Attention-LSTM: single LSTM(64) encoder → Bahdanau temporal attention → Dense(32) → Dense(1). Attention lets the model selectively weight past hidden states, focusing on regime-relevant windows. MC Dropout (200 passes) produces Bayesian uncertainty bands. Chronological 70/15/15 split; early stopping on val loss.',
 }
 
 // ── InfoTooltip — mirrors FamaFrenchFactors.jsx pattern ──────────────────────
@@ -123,6 +125,15 @@ function InfoTooltip({ content, citations }) {
   )
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtDollar(v) {
+  if (v == null) return '—'
+  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`
+  if (v >= 1_000)     return `$${(v / 1_000).toFixed(1)}k`
+  return `$${v.toFixed(0)}`
+}
+
 // ── Fan chart tooltip ─────────────────────────────────────────────────────────
 
 function FanTooltip({ active, payload, label, color }) {
@@ -133,7 +144,7 @@ function FanTooltip({ active, payload, label, color }) {
       <div className="mono text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>{label}</div>
       {p50 != null && (
         <div className="mono text-sm" style={{ color }}>
-          median: {p50 >= 0 ? '+' : ''}{p50.toFixed(1)}%
+          median: {fmtDollar(p50)}
         </div>
       )}
     </div>
@@ -141,20 +152,28 @@ function FanTooltip({ active, payload, label, color }) {
 }
 
 // ── Build Recharts-compatible data from forecast band ─────────────────────────
+// Converts cumulative-% forecast bands to actual portfolio dollar values.
 // Uses stackId trick: transparent base area + coloured range area.
 
-function buildChartData(band) {
-  if (!band?.dates) return []
-  return band.dates.map((date, i) => ({
-    date,
-    // Outer band (p5 → p95): base at p5, height = p95 - p5
-    outer_base:   band.p5[i],
-    outer_height: band.p95[i] - band.p5[i],
-    // Inner band (p25 → p75): base at p25, height = p75 - p25
-    inner_base:   band.p25[i],
-    inner_height: band.p75[i] - band.p25[i],
-    p50:          band.p50[i],
-  }))
+function buildChartData(band, lastValue) {
+  if (!band?.dates || !lastValue) return []
+  const toVal = pct => lastValue * (1 + pct / 100)
+  return band.dates.map((date, i) => {
+    const p5  = toVal(band.p5[i])
+    const p95 = toVal(band.p95[i])
+    const p25 = toVal(band.p25[i])
+    const p75 = toVal(band.p75[i])
+    return {
+      date,
+      // Outer band (p5 → p95)
+      outer_base:   p5,
+      outer_height: p95 - p5,
+      // Inner band (p25 → p75)
+      inner_base:   p25,
+      inner_height: p75 - p25,
+      p50:          toVal(band.p50[i]),
+    }
+  })
 }
 
 // ── Metadata strip ────────────────────────────────────────────────────────────
@@ -234,13 +253,13 @@ function getMetaItems(method, meta) {
 
 // ── Main card ─────────────────────────────────────────────────────────────────
 
-export default function ForecastMethodCard({ result, loading }) {
+export default function ForecastMethodCard({ result, loading, lastValue }) {
   const { method, label, color, forecast, metadata, error, compute_ms } = result ?? {}
   const complexity = COMPLEXITY[method] ?? { label: '—', color: 'var(--text-secondary)' }
   const citations  = CITATIONS[method] ?? []
   const desc       = METHOD_DESC[method] ?? ''
 
-  const chartData = useMemo(() => buildChartData(forecast), [forecast])
+  const chartData = useMemo(() => buildChartData(forecast, lastValue), [forecast, lastValue])
 
   const tickCount = 4
   const tickDates = chartData.length
@@ -309,8 +328,8 @@ export default function ForecastMethodCard({ result, loading }) {
               tick={{ ...AXIS_STYLE.tick, fontSize: 9 }}
               axisLine={AXIS_STYLE.axisLine}
               tickLine={AXIS_STYLE.tickLine}
-              tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`}
-              width={42}
+              tickFormatter={fmtDollar}
+              width={50}
             />
             <ReferenceLine y={0} stroke="var(--border)" strokeWidth={1} />
             <Tooltip content={<FanTooltip color={color} />} />

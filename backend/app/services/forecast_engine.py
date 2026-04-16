@@ -659,13 +659,80 @@ def forecast_var(
     }
 
 
-# ── 6. LSTM Neural Network ───────────────────────────────────────────────────
+# ── 6. Attention-LSTM Neural Network ─────────────────────────────────────────
 
-# Model cache: {hash: keras.Model}  — avoids retraining on identical data
+# Model cache: {hash: (model, history)}  — avoids retraining on identical data
 _LSTM_CACHE: dict = {}
 
 def _returns_hash(r: pd.Series) -> str:
     return hashlib.md5(r.values.tobytes()).hexdigest()
+
+
+def _build_attention_lstm(lookback: int, n_features: int, attn_units: int = 32):
+    """
+    Temporal Attention-LSTM for sequence-to-one return forecasting.
+
+    Architecture
+    ------------
+    Input(lookback, n_features)
+      → LSTM(64, return_sequences=True, dropout=0.20, recurrent_dropout=0.10)
+                     ↓  all hidden states H = [h₁,…,h_T]  ∈ ℝ^(T×64)
+      → Bahdanau attention:
+            eₜ = vᵀ · tanh(Wₐ · hₜ)            alignment score
+            α  = softmax(e)                        attention weights
+            c  = Σ αₜ · hₜ                         context vector ∈ ℝ^64
+      → Dropout(0.20) → Dense(32, relu) → Dense(1)
+
+    The attention mechanism lets the model selectively weight past hidden
+    states, focussing on regime-relevant windows rather than treating all
+    timesteps equally — critical for financial data with volatility clusters
+    and trend breaks.
+
+    Reference
+    ---------
+    CS230 Stanford (2020). Predicting Stock Market Returns Using Temporal
+      Attention-Enhanced LSTM. Winter 2020 Project Reports.
+      https://cs230.stanford.edu/projects_winter_2020/reports/32066186.pdf
+
+    Bahdanau, D., Cho, K., & Bengio, Y. (2015). Neural machine translation
+      by jointly learning to align and translate. ICLR 2015.
+      https://arxiv.org/abs/1409.0473
+
+    Hochreiter, S. & Schmidhuber, J. (1997). Long short-term memory.
+      Neural Computation, 9(8), 1735–1780.
+      https://doi.org/10.1162/neco.1997.9.8.1735
+    """
+    import tensorflow as tf
+    from tensorflow import keras
+
+    inputs = keras.Input(shape=(lookback, n_features), name="sequence_input")
+
+    # LSTM encoder — return all hidden states for attention
+    hidden = keras.layers.LSTM(
+        64, return_sequences=True,
+        dropout=0.20, recurrent_dropout=0.10,
+        name="lstm_encoder",
+    )(inputs)                                          # (batch, T, 64)
+
+    # Bahdanau additive attention
+    # eₜ = vᵀ · tanh(Wₐ · hₜ)
+    score = keras.layers.Dense(attn_units, use_bias=False, name="attn_W")(hidden)
+    score = keras.layers.Activation("tanh", name="attn_tanh")(score)
+    score = keras.layers.Dense(1, use_bias=False, name="attn_v")(score)      # (batch, T, 1)
+    attn_weights = keras.layers.Softmax(axis=1, name="attn_softmax")(score)  # (batch, T, 1)
+
+    # Context vector: weighted sum of hidden states
+    context = keras.layers.Multiply(name="attn_context")([hidden, attn_weights])  # (batch, T, 64)
+    context = keras.layers.Lambda(
+        lambda x: tf.reduce_sum(x, axis=1), name="attn_sum"
+    )(context)                                         # (batch, 64)
+
+    # Output head
+    x = keras.layers.Dropout(0.20, name="head_dropout")(context)
+    x = keras.layers.Dense(32, activation="relu", name="head_dense")(x)
+    output = keras.layers.Dense(1, name="output")(x)
+
+    return keras.Model(inputs=inputs, outputs=output, name="attention_lstm")
 
 
 def forecast_lstm(
@@ -675,34 +742,36 @@ def forecast_lstm(
     last_date: str,
 ) -> dict:
     """
-    LSTM with MC Dropout — Bayesian uncertainty estimation without ensembles.
+    Attention-LSTM with MC Dropout — Bayesian uncertainty via stochastic inference.
 
-    Architecture
-    ------------
-    Input(lookback=60, features=5) → LSTM(64, dropout=0.2, recurrent_dropout=0.1)
-      → LSTM(32, dropout=0.2) → Dense(1)
+    Replaces the stacked LSTM with a single encoder + Bahdanau temporal attention,
+    allowing the model to selectively focus on the most relevant past timesteps
+    when predicting future returns. This is especially important for financial
+    series where volatility clustering means recent regimes should receive more
+    weight than distant history.
 
-    Features per timestep: [daily_return, 21d_vol, 5d_momentum,
-                             21d_momentum, RSI-14]
+    Features (per timestep)
+    -----------------------
+    [daily_return, 21d_vol, 5d_momentum, 21d_momentum, RSI-14]
 
     Out-of-sample validation
     ------------------------
-    Walk-forward expanding-window cross-validation:
-      - Training data: first 70% of history
-      - Validation data: next 15% (chronological — no future leakage)
-      - Test data: final 15% (held out; never seen during training)
-    Early stopping monitors validation loss (patience=10 epochs).
+    Chronological 70 / 15 / 15 train / val / test split.
+    Early stopping on val loss (patience=10). Random k-fold is never used
+    — it violates temporal ordering (Lopez de Prado, 2018, Ch. 7).
 
-    MC Dropout inference: dropout layers remain active at test time
-    (Gal & Ghahramani, 2016). Running n_dropout_passes=200 forward
-    passes produces a distribution of 12-month cumulative returns,
-    from which percentile fan bands are computed.
+    MC Dropout inference: dropout active at test time (training=True).
+    n_dropout_passes stochastic forward passes → percentile fan bands.
 
     References
     ----------
-    Hochreiter, S. & Schmidhuber, J. (1997). Long short-term memory.
-      Neural Computation, 9(8), 1735–1780.
-      https://doi.org/10.1162/neco.1997.9.8.1735
+    CS230 Stanford (2020). Predicting Stock Market Returns Using Temporal
+      Attention-Enhanced LSTM. Winter 2020 Project Reports.
+      https://cs230.stanford.edu/projects_winter_2020/reports/32066186.pdf
+
+    Bahdanau, D., Cho, K., & Bengio, Y. (2015). Neural machine translation
+      by jointly learning to align and translate. ICLR 2015.
+      https://arxiv.org/abs/1409.0473
 
     Fischer, T. & Krauss, C. (2018). Deep learning with long short-term
       memory networks for financial market predictions. European Journal
@@ -726,17 +795,16 @@ def forecast_lstm(
         from tensorflow import keras
     except ImportError:
         raise RuntimeError(
-            "TensorFlow is not installed. Add 'tensorflow-cpu' to requirements.txt "
-            "or use the Factor/GARCH methods instead."
+            "TensorFlow is not installed. Add 'tensorflow-cpu' to requirements.txt."
         )
 
     t0       = time.time()
     LOOKBACK = 60
-    MIN_OBS  = LOOKBACK + 90   # need at least 90 OOS observations
+    MIN_OBS  = LOOKBACK + 90
 
     if len(returns) < MIN_OBS:
         raise ValueError(
-            f"Insufficient history for LSTM: need ≥{MIN_OBS} trading days, "
+            f"Insufficient history for Attention-LSTM: need ≥{MIN_OBS} trading days, "
             f"got {len(returns)}. Try a longer backtest date range."
         )
 
@@ -746,52 +814,42 @@ def forecast_lstm(
     df["vol_21d"]  = r.rolling(21).std() * np.sqrt(TRADING_DAYS)
     df["mom_5d"]   = r.rolling(5).sum()
     df["mom_21d"]  = r.rolling(21).sum()
-    # RSI-14
-    delta  = r.diff()
-    gain   = delta.clip(lower=0).rolling(14).mean()
-    loss   = (-delta.clip(upper=0)).rolling(14).mean()
-    df["rsi_14"] = gain / (gain + loss + 1e-9)
+    delta          = r.diff()
+    gain           = delta.clip(lower=0).rolling(14).mean()
+    loss           = (-delta.clip(upper=0)).rolling(14).mean()
+    df["rsi_14"]   = gain / (gain + loss + 1e-9)
     df = df.dropna()
 
     from sklearn.preprocessing import MinMaxScaler
 
-    scaler = MinMaxScaler(feature_range=(-1, 1))
     feat_cols = ["r", "vol_21d", "mom_5d", "mom_21d", "rsi_14"]
-    scaled = scaler.fit_transform(df[feat_cols].values)   # fit on ALL data
-    # Note: scaler fitted on all data for feature normalisation; the
-    # chronological split prevents label leakage.
+    scaler    = MinMaxScaler(feature_range=(-1, 1))
+    scaled    = scaler.fit_transform(df[feat_cols].values)
 
     def make_sequences(data):
         X, y = [], []
         for i in range(LOOKBACK, len(data)):
             X.append(data[i - LOOKBACK:i])
-            y.append(data[i, 0])   # predict next-day return (column 0)
+            y.append(data[i, 0])
         return np.array(X), np.array(y)
 
-    # Chronological 70/15/15 split
-    n        = len(scaled)
-    n_train  = int(n * 0.70)
-    n_val    = int(n * 0.15)
-    X_tr, y_tr  = make_sequences(scaled[:n_train])
+    # Chronological 70 / 15 / 15 split
+    n       = len(scaled)
+    n_train = int(n * 0.70)
+    n_val   = int(n * 0.15)
+    X_tr,  y_tr  = make_sequences(scaled[:n_train])
     X_val, y_val = make_sequences(scaled[n_train:n_train + n_val])
-    X_te, y_te  = make_sequences(scaled[n_train + n_val:])
+    X_te,  y_te  = make_sequences(scaled[n_train + n_val:])
 
     # ── Build or retrieve cached model ────────────────────────────────────
     rhash = _returns_hash(returns)
     if rhash not in _LSTM_CACHE:
         tf.random.set_seed(42)
-        model = keras.Sequential([
-            keras.layers.Input(shape=(LOOKBACK, len(feat_cols))),
-            keras.layers.LSTM(64, return_sequences=True,
-                              dropout=0.20, recurrent_dropout=0.10),
-            keras.layers.LSTM(32, dropout=0.20),
-            keras.layers.Dense(1),
-        ])
+        model = _build_attention_lstm(LOOKBACK, len(feat_cols))
         model.compile(optimizer=keras.optimizers.Adam(1e-3), loss="mse")
 
-        # Early stopping on validation loss (Lopez de Prado Ch. 7 principle)
         es = keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=10, restore_best_weights=True
+            monitor="val_loss", patience=10, restore_best_weights=True,
         )
         history = model.fit(
             X_tr, y_tr,
@@ -805,53 +863,50 @@ def forecast_lstm(
 
     model, history = _LSTM_CACHE[rhash]
 
-    val_loss  = float(min(history.history.get("val_loss", [np.nan])))
-    n_epochs  = len(history.history.get("loss", []))
-    n_params  = int(model.count_params())
+    val_loss = float(min(history.history.get("val_loss", [float("nan")])))
+    n_epochs = len(history.history.get("loss", []))
+    n_params = int(model.count_params())
 
-    # OOS test performance (held-out final 15%)
+    # OOS test performance (held-out 15%)
     oos_preds = model(X_te, training=False).numpy().flatten()
     oos_mse   = float(np.mean((oos_preds - y_te) ** 2))
 
-    # ── MC Dropout inference — forecast horizon ────────────────────────────
-    # Seed with last LOOKBACK days of scaled features
+    # ── MC Dropout inference ───────────────────────────────────────────────
     seed_window = scaled[-LOOKBACK:].copy()
-
-    all_paths = np.zeros((horizon, n_dropout_passes))
+    all_paths   = np.zeros((horizon, n_dropout_passes))
 
     for pass_i in range(n_dropout_passes):
-        window  = seed_window.copy()
-        cum_r   = 0.0
+        window = seed_window.copy()
+        cum_r  = 0.0
         for t in range(horizon):
-            x_in  = window[np.newaxis, ...]          # (1, LOOKBACK, features)
-            r_hat = float(model(x_in, training=True).numpy()[0, 0])  # dropout ON
-            # Inverse-transform only the return column
-            tmp         = np.zeros((1, len(feat_cols)))
-            tmp[0, 0]   = r_hat
-            r_real      = float(scaler.inverse_transform(tmp)[0, 0])
-            cum_r       = (1 + cum_r) * (1 + r_real) - 1
+            x_in  = window[np.newaxis, ...]              # (1, LOOKBACK, features)
+            r_hat = float(model(x_in, training=True).numpy()[0, 0])   # dropout ON
+            tmp       = np.zeros((1, len(feat_cols)))
+            tmp[0, 0] = r_hat
+            r_real    = float(scaler.inverse_transform(tmp)[0, 0])
+            cum_r     = (1 + cum_r) * (1 + r_real) - 1
             all_paths[t, pass_i] = cum_r
-            # Slide window: drop oldest, append new step
-            new_row     = window[-1].copy()
-            new_row[0]  = r_hat    # use scaled prediction as next input
-            window      = np.vstack([window[1:], new_row])
+            new_row    = window[-1].copy()
+            new_row[0] = r_hat
+            window     = np.vstack([window[1:], new_row])
 
     dates = _forecast_dates(last_date, horizon)
     band  = _paths_to_band(all_paths, dates)
     return {
         "band": band,
         "metadata": {
-            "architecture":      "LSTM(64) → LSTM(32) → Dense(1)",
-            "lookback_days":     LOOKBACK,
-            "train_n":           len(X_tr),
-            "val_n":             len(X_val),
-            "test_n":            len(X_te),
-            "n_params":          n_params,
-            "epochs_trained":    n_epochs,
-            "val_loss":          round(val_loss, 6),
-            "oos_mse":           round(oos_mse, 6),
-            "dropout_passes":    n_dropout_passes,
-            "split":             "70/15/15 chronological",
+            "architecture":   "Attention-LSTM(64) → Dense(32) → Dense(1)",
+            "attention":      "Bahdanau additive (CS230 2020)",
+            "lookback_days":  LOOKBACK,
+            "train_n":        len(X_tr),
+            "val_n":          len(X_val),
+            "test_n":         len(X_te),
+            "n_params":       n_params,
+            "epochs_trained": n_epochs,
+            "val_loss":       round(val_loss, 6),
+            "oos_mse":        round(oos_mse, 6),
+            "dropout_passes": n_dropout_passes,
+            "split":          "70/15/15 chronological",
         },
         "compute_ms": int((time.time() - t0) * 1000),
     }

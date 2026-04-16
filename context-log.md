@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-04-17 — Forecast: actual dollar values, Attention-LSTM, ETA progress bar
+
+**What:** Three improvements to the Forecast tab:
+
+1. **Actual portfolio values chart** — ForecastComposite and ForecastMethodCard now show real dollar portfolio values (e.g. $10,000 → $17,400) instead of rebased % returns. Forecast lines are projected as `last_value × (1 + p_pct/100)` anchored to the final historical equity value. Y-axis formatted as `$10k`, `$1.2M` etc.
+
+2. **Attention-LSTM** (CS230 Stanford 2020, Bahdanau 2015) — replaced stacked LSTM(64→32) with a single LSTM(64) encoder + Bahdanau temporal attention mechanism. Attention learns which past hidden states are most relevant (e.g. recent volatility regimes vs. distant history). `tensorflow-cpu` enabled in requirements.txt. New architecture: `Attention-LSTM(64) → Dense(32) → Dense(1)`.
+
+3. **ETA progress bar** — `EtaBar` component in ForecastPanel uses `setInterval(250ms)` to show live elapsed time and estimated remaining time. Phase 1 estimated at 4s, Phase 2 (HMM+VAR+Attention-LSTM) at 75s. Bar fills smoothly; never completes until the fetch resolves.
+
+**Files modified:**
+- `backend/requirements.txt` — uncommented tensorflow-cpu
+- `backend/app/services/forecast_engine.py` — `_build_attention_lstm()` helper + updated `forecast_lstm()`
+- `frontend/src/hooks/useForecast.js` — added `timing` state and `p1StartRef`/`p2StartRef` refs
+- `frontend/src/components/Dashboard/ForecastComposite.jsx` — actual dollar values
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — `lastValue` prop, dollar Y-axis, Attention-LSTM citations
+- `frontend/src/components/Dashboard/ForecastPanel.jsx` — EtaBar, pass `lastValue`, updated copy
+
+---
+
 ## 2026-04-16 — Fix SplitView crash: remove useEffect hook rule violation
 
 **What:** `SplitView.jsx` crashed at runtime due to a React hook called conditionally inside a render block.

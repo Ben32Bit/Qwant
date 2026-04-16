@@ -7,6 +7,13 @@ import { AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE } from '../../utils/chartConfig.j
 
 const METHOD_ORDER = ['monte_carlo', 'garch', 'factor', 'hmm', 'var', 'lstm']
 
+function fmtVal(v) {
+  if (v == null) return '—'
+  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`
+  if (v >= 1_000)     return `$${(v / 1_000).toFixed(1)}k`
+  return `$${v.toFixed(0)}`
+}
+
 function CompositeTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
   return (
@@ -19,9 +26,7 @@ function CompositeTooltip({ active, payload, label }) {
           <div key={p.dataKey} className="mono text-xs flex items-center gap-2">
             <span style={{ color: p.color }}>■</span>
             <span style={{ color: 'var(--text-secondary)' }}>{p.name}:</span>
-            <span style={{ color: p.value >= 0 ? p.color : 'var(--accent-red)' }}>
-              {p.value >= 0 ? '+' : ''}{p.value.toFixed(1)}%
-            </span>
+            <span style={{ color: p.color }}>{fmtVal(p.value)}</span>
           </div>
         ))}
     </div>
@@ -29,35 +34,39 @@ function CompositeTooltip({ active, payload, label }) {
 }
 
 /**
- * Full-width composite chart: historical equity curve on the left,
- * all 6 method p50 (median) forecast lines on the right, separated
- * by a vertical dashed reference line at the forecast start date.
+ * Full-width composite chart: historical portfolio value curve on the left,
+ * all method median (p50) forecast lines continuing from the last historical
+ * value on the right, separated by a dashed reference line at forecast start.
  *
- * The historical curve is rebased to 0% at the chart's first point,
- * so the y-axis always shows % return since backtest start.
+ * Y-axis shows actual portfolio dollar values — not rebased % returns — so
+ * users can read projected portfolio worth directly off the chart.
+ *
+ * Forecast values are computed as:
+ *   projected_value = last_historical_value × (1 + p50_pct_return / 100)
  */
 export default function ForecastComposite({ results, equityCurve, forecastStart, loading }) {
   const chartData = useMemo(() => {
     if (!equityCurve?.length) return []
 
-    // Rebase historical to % return
-    const base = equityCurve[0].value
+    // Historical: use actual portfolio values
     const historical = equityCurve.map(pt => ({
       date:       pt.date,
-      Historical: ((pt.value / base) - 1) * 100,
+      Historical: pt.value,
     }))
 
-    // Collect forecast p50 per method
+    // Last historical value is the anchor for all forecast projections
+    const lastValue = equityCurve[equityCurve.length - 1].value
+
+    // Convert each method's cumulative-% p50 forecast to actual dollar values
     const forecastByDate = {}
     for (const r of (results ?? [])) {
       if (!r.forecast) continue
       r.forecast.dates.forEach((d, i) => {
         if (!forecastByDate[d]) forecastByDate[d] = { date: d }
-        forecastByDate[d][r.method] = r.forecast.p50[i]
+        forecastByDate[d][r.method] = lastValue * (1 + r.forecast.p50[i] / 100)
       })
     }
 
-    // Merge: historical rows + forecast rows
     const forecastRows = Object.values(forecastByDate).sort((a, b) => a.date.localeCompare(b.date))
     return [...historical, ...forecastRows]
   }, [equityCurve, results])
@@ -89,7 +98,7 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
           <h3 className="mono font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
             Composite Forecast
             <span className="ml-2 font-normal text-xs" style={{ color: 'var(--text-secondary)' }}>
-              · median path per method · next 12 months
+              · projected portfolio value · next 12 months
             </span>
           </h3>
           <p className="mono text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>
@@ -119,15 +128,16 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
             tick={AXIS_STYLE.tick}
             axisLine={AXIS_STYLE.axisLine}
             tickLine={AXIS_STYLE.tickLine}
-            tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`}
+            tickFormatter={fmtVal}
+            width={60}
           />
-          <ReferenceLine y={0} stroke="var(--border)" strokeWidth={1} />
           {forecastStart && (
             <ReferenceLine
               x={forecastStart}
-              stroke="rgba(255,255,255,0.2)"
+              stroke="rgba(255,255,255,0.25)"
               strokeDasharray="4 4"
               strokeWidth={1}
+              label={{ value: 'Forecast', position: 'insideTopRight', fontSize: 9, fill: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}
             />
           )}
           <Tooltip content={<CompositeTooltip />} />
@@ -135,7 +145,7 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
             wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: 'var(--text-secondary)' }}
           />
 
-          {/* Historical equity curve */}
+          {/* Historical portfolio value */}
           <Line
             type="monotone"
             dataKey="Historical"
@@ -146,7 +156,7 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
             strokeDasharray="3 3"
           />
 
-          {/* One median line per method */}
+          {/* One median projection line per method */}
           {METHOD_ORDER.map(method => {
             const r = (results ?? []).find(x => x.method === method)
             if (!r?.forecast) return null

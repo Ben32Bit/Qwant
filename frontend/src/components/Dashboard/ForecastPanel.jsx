@@ -1,14 +1,18 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { useForecast } from '../../hooks/useForecast.js'
 import ForecastComposite from './ForecastComposite.jsx'
 import ForecastMethodCard from './ForecastMethodCard.jsx'
 
 const METHOD_ORDER = ['monte_carlo', 'garch', 'factor', 'hmm', 'var', 'lstm']
 
-// Placeholder cards while phase 2 methods are loading
 const PHASE2_METHODS = new Set(['hmm', 'var', 'lstm'])
 const PHASE1_METHODS = new Set(['monte_carlo', 'garch', 'factor'])
 
+// Typical durations for the ETA bar (milliseconds)
+const PHASE1_EST_MS = 4_000
+const PHASE2_EST_MS = 75_000   // HMM + VAR + Attention-LSTM can take 30-90s
+
+// Placeholder cards while a phase is loading
 function LoadingCard({ method }) {
   const LABELS = {
     monte_carlo: 'Monte Carlo (GBM)',
@@ -16,7 +20,7 @@ function LoadingCard({ method }) {
     hmm:         'Hidden Markov Model',
     factor:      'Factor Model (FF5)',
     var:         'VAR Multi-Asset',
-    lstm:        'LSTM Neural Net',
+    lstm:        'Attention-LSTM',
   }
   const COLORS = {
     monte_carlo: '#4a9eff', garch: '#ffd43b', hmm: '#a855f7',
@@ -26,16 +30,91 @@ function LoadingCard({ method }) {
     <ForecastMethodCard
       result={{ method, label: LABELS[method], color: COLORS[method] }}
       loading
+      lastValue={null}
     />
   )
 }
 
+// ── ETA Progress Bar ──────────────────────────────────────────────────────────
+
+function EtaBar({ loading, p1StartRef, p2StartRef, timing }) {
+  const [elapsed, setElapsed] = useState(0)
+
+  // Tick every 250ms while any phase is running
+  useEffect(() => {
+    if (!loading.phase1 && !loading.phase2) {
+      setElapsed(0)
+      return
+    }
+    const startRef = loading.phase1 ? p1StartRef : p2StartRef
+    const tick = () => setElapsed(Date.now() - (startRef.current ?? Date.now()))
+    tick()
+    const id = setInterval(tick, 250)
+    return () => clearInterval(id)
+  }, [loading.phase1, loading.phase2, p1StartRef, p2StartRef])
+
+  if (!loading.phase1 && !loading.phase2) return null
+
+  const estMs    = loading.phase1 ? PHASE1_EST_MS : PHASE2_EST_MS
+  const progress = Math.min(elapsed / estMs, 0.97)   // never fill completely while pending
+  const etaMs    = Math.max(0, estMs - elapsed)
+
+  const fmtEta = (ms) => {
+    if (ms >= 60_000) return `~${Math.ceil(ms / 60_000)}m`
+    return `~${Math.ceil(ms / 1_000)}s`
+  }
+
+  const phase = loading.phase1 ? 1 : 2
+  const methods = loading.phase1
+    ? 'Monte Carlo · GARCH · Factor Model'
+    : 'Hidden Markov Model · VAR · Attention-LSTM'
+
+  return (
+    <div className="rounded-lg border px-4 py-3"
+      style={{ borderColor: 'rgba(74,158,255,0.2)', background: 'rgba(74,158,255,0.04)' }}>
+      {/* Label row */}
+      <div className="flex items-center justify-between mb-2">
+        <span className="mono text-xs" style={{ color: 'var(--accent-blue)' }}>
+          ⟳ Phase {phase}: {methods}
+        </span>
+        <span className="mono text-xs font-bold" style={{ color: 'var(--accent-blue)' }}>
+          ETA {fmtEta(etaMs)}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="rounded-full overflow-hidden" style={{ height: 4, background: 'var(--border)' }}>
+        <div
+          className="h-full rounded-full transition-all"
+          style={{
+            width: `${progress * 100}%`,
+            background: 'linear-gradient(90deg, var(--accent-blue), #00d4aa)',
+            transition: 'width 0.25s linear',
+          }}
+        />
+      </div>
+
+      {/* Phase 2 note when phase 1 results are already shown */}
+      {loading.phase2 && (
+        <p className="mono text-xs mt-2" style={{ color: 'rgba(136,136,160,0.7)' }}>
+          Phase 1 results shown below. ML methods will appear when ready.
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Main panel ────────────────────────────────────────────────────────────────
+
 export default function ForecastPanel({ backtest, portfolio }) {
-  const { results, meta, loading, error, run, hasData } = useForecast(backtest, portfolio)
+  const { results, meta, loading, error, run, hasData, timing, p1StartRef, p2StartRef } =
+    useForecast(backtest, portfolio)
 
   const isRunning = loading.phase1 || loading.phase2
 
-  // Build result map for quick lookup
+  // Last historical portfolio value — anchor for projecting actual dollar values
+  const lastValue = backtest?.equity_curve?.at(-1)?.value ?? null
+
   const resultMap = {}
   for (const r of results) resultMap[r.method] = r
 
@@ -70,30 +149,20 @@ export default function ForecastPanel({ backtest, portfolio }) {
             onMouseEnter={e => { if (!isRunning) e.currentTarget.style.background = 'rgba(74,158,255,0.1)' }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
           >
-            {loading.phase1 ? 'Running fast methods…'
-              : loading.phase2 ? 'Running ML methods…'
+            {isRunning ? 'Running…'
               : hasData ? '↺ Re-run Forecast'
               : '▶ Run Forecast'}
           </button>
         </div>
 
-        {/* Loading progress indicator */}
+        {/* ETA progress bar */}
         {isRunning && (
-          <div className="rounded-lg border px-4 py-3 mono text-xs"
-            style={{ borderColor: 'rgba(74,158,255,0.25)', background: 'rgba(74,158,255,0.04)', color: 'var(--text-secondary)' }}>
-            <div className="flex items-center gap-3">
-              <span style={{ color: 'var(--accent-blue)' }}>
-                {loading.phase1
-                  ? '⟳ Phase 1: Monte Carlo, GARCH, Factor Model (~1–2s)…'
-                  : '⟳ Phase 2: HMM, VAR, LSTM (~10–40s depending on history length)…'}
-              </span>
-            </div>
-            {loading.phase2 && hasData && (
-              <p className="mt-1" style={{ color: 'rgba(136,136,160,0.7)' }}>
-                Phase 1 results shown below. Slower methods will appear when ready.
-              </p>
-            )}
-          </div>
+          <EtaBar
+            loading={loading}
+            p1StartRef={p1StartRef}
+            p2StartRef={p2StartRef}
+            timing={timing}
+          />
         )}
 
         {/* Error */}
@@ -110,7 +179,7 @@ export default function ForecastPanel({ backtest, portfolio }) {
             <div className="mono text-4xl mb-4 opacity-20 select-none" style={{ color: 'var(--accent-blue)' }}>◈</div>
             <p className="mono text-sm mb-1" style={{ color: 'var(--text-primary)' }}>6 probabilistic forecast methods</p>
             <p className="text-xs max-w-sm" style={{ color: 'var(--text-secondary)' }}>
-              Monte Carlo · GARCH · Factor Model · HMM Regimes · VAR · LSTM
+              Monte Carlo · GARCH · Factor Model · HMM Regimes · VAR · Attention-LSTM
             </p>
             <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
               All methods cite peer-reviewed research and use strict walk-forward out-of-sample testing.
@@ -132,13 +201,10 @@ export default function ForecastPanel({ backtest, portfolio }) {
         {(hasData || isRunning) && (
           <div className="grid grid-cols-2 gap-4">
             {METHOD_ORDER.map(method => {
-              const result  = resultMap[method]
-              const p1Done  = !loading.phase1
-              const p2Done  = !loading.phase2
+              const result   = resultMap[method]
               const inPhase1 = PHASE1_METHODS.has(method)
               const inPhase2 = PHASE2_METHODS.has(method)
 
-              // Show skeleton if the phase for this method is still running and no result yet
               if (!result && ((inPhase1 && loading.phase1) || (inPhase2 && loading.phase2))) {
                 return <LoadingCard key={method} method={method} />
               }
@@ -148,6 +214,7 @@ export default function ForecastPanel({ backtest, portfolio }) {
                   key={method}
                   result={result}
                   loading={inPhase2 && loading.phase2 && !result.forecast}
+                  lastValue={lastValue}
                 />
               )
             })}
@@ -164,14 +231,16 @@ export default function ForecastPanel({ backtest, portfolio }) {
             <p className="mono text-xs leading-relaxed" style={{ color: 'var(--text-secondary)', opacity: 0.8 }}>
               All methods use walk-forward (expanding-window) train/test splits. Random k-fold is never
               applied — it violates temporal ordering and leaks future data. Each method reports an
-              out-of-sample validation diagnostic (Ljung-Box, OOS R², regime sanity check, LSTM OOS MSE).
+              out-of-sample validation diagnostic (Ljung-Box, OOS R², regime sanity check, Attention-LSTM OOS MSE).
             </p>
             <p className="mono text-xs mt-2 leading-relaxed" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
               📄 Lopez de Prado, M. (2018). Advances in Financial Machine Learning, Ch. 7.
               https://doi.org/10.1002/9781119482161 ·
               Bailey, D.H. & Lopez de Prado, M. (2014). The Deflated Sharpe Ratio.
               Journal of Portfolio Management, 40(5), 94–107.
-              https://doi.org/10.3905/jpm.2014.40.5.094
+              https://doi.org/10.3905/jpm.2014.40.5.094 ·
+              CS230 Stanford (2020). Temporal Attention-Enhanced LSTM.
+              https://cs230.stanford.edu/projects_winter_2020/reports/32066186.pdf
             </p>
           </div>
         )}

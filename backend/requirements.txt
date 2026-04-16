@@ -16,6 +16,5 @@ arch>=6.3.0            # GARCH(1,1) — Engle (1982), Bollerslev (1986)
 hmmlearn>=0.3.2        # Hidden Markov Model — Hamilton (1989)
 scikit-learn>=1.4.0    # Ledoit-Wolf covariance, MinMaxScaler for LSTM
 statsmodels>=0.14.0    # VAR — Sims (1980), Campbell et al. (2003)
-# tensorflow-cpu>=2.16  # LSTM — uncomment if host has ≥2GB RAM available
-#                        # (Fischer & Krauss 2018; Gal & Ghahramani 2016)
-#                        # Railway Starter (512MB) may OOM — upgrade plan first
+tensorflow-cpu>=2.16   # Attention-LSTM — Fischer & Krauss (2018); Gal & Ghahramani (2016)
+                       # CS230 Stanford (2020) temporal attention mechanism
