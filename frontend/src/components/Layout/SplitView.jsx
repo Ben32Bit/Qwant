@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react'
 import UnifiedChatPanel from '../Chat/UnifiedChatPanel.jsx'
 import ManualBuilderPanel from '../Chat/ManualBuilderPanel.jsx'
 import ResultsPanel from '../Dashboard/ResultsPanel.jsx'
+import ForecastPanel from '../Dashboard/ForecastPanel.jsx'
 import ScreenerResults from '../Dashboard/ScreenerResults.jsx'
 import RotationEquityChart from '../Dashboard/RotationEquityChart.jsx'
 import DrawdownChart from '../Dashboard/DrawdownChart.jsx'
@@ -106,9 +107,40 @@ function RotationPanel({ backtest, loading, topNHeld, onPortToManual }) {
   )
 }
 
+// ── Right-panel tab bar (Results / Forecast) ──────────────────────────────────
+const RIGHT_TABS = [
+  { id: 'results',  label: 'Results',  accent: 'var(--accent-blue)'   },
+  { id: 'forecast', label: 'Forecast', accent: 'var(--accent-yellow)' },
+]
+
+function RightTab({ tab, active, onClick, disabled }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        fontSize: 11,
+        fontFamily: 'var(--font-mono, monospace)',
+        padding: '5px 14px',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        border: 'none',
+        background: 'transparent',
+        transition: 'color 0.15s, border-color 0.15s',
+        borderBottom: `2px solid ${active ? tab.accent : 'transparent'}`,
+        color: active ? tab.accent : disabled ? 'var(--border)' : 'var(--text-secondary)',
+        whiteSpace: 'nowrap',
+        opacity: disabled ? 0.4 : 1,
+      }}
+    >
+      {tab.label}
+    </button>
+  )
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 export default function SplitView() {
-  const [mode, setMode] = useState('ai')   // 'ai' | 'manual'
+  const [mode, setMode] = useState('ai')         // 'ai' | 'manual'
+  const [rightTab, setRightTab] = useState('results')  // 'results' | 'forecast'
 
   // ── AI assistant state ────────────────────────────────────────────────────
   const [aiLoading, setAiLoading] = useState(false)
@@ -203,73 +235,24 @@ export default function SplitView() {
     setMode('manual')
   }, [screenResult, rotationBacktest, rotationTopN])
 
-  // ── Right panel renderer ──────────────────────────────────────────────────
-  function RightPanel() {
-    if (mode === 'manual') {
-      return (
-        <ResultsPanel
-          backtest={manualBacktest}
-          portfolio={manualPortfolio}
-          loading={manualLoading}
-          displayConfig={manualBacktest ? {
-            sections: ['equity_curve', 'drawdown', 'metrics_summary', 'weight_drift', 'monthly_heatmap', 'correlation_matrix'],
-            featured_metrics: ['cagr', 'sharpe', 'max_drawdown', 'volatility'],
-          } : null}
-        />
-      )
-    }
+  // Determine which backtest/portfolio is active for the right panel
+  const activeBacktest  = mode === 'manual' ? manualBacktest  : backtest
+  const activePortfolio = mode === 'manual' ? manualPortfolio : portfolio
+  const activeDisplay   = mode === 'manual'
+    ? (manualBacktest ? {
+        sections: ['equity_curve', 'drawdown', 'metrics_summary', 'weight_drift', 'monthly_heatmap', 'correlation_matrix'],
+        featured_metrics: ['cagr', 'sharpe', 'max_drawdown', 'volatility'],
+      } : null)
+    : displayConfig
+  const activeLoading   = mode === 'manual' ? manualLoading : aiLoading
 
-    // AI mode — screener result
-    if (screenResult || rotationLoading) {
-      return (
-        <div className="flex h-full">
-          {/* Screener rankings */}
-          <div className="flex-1 overflow-hidden border-r" style={{ borderColor: 'var(--border)' }}>
-            <ScreenerResults
-              screenResult={screenResult}
-              onBacktestRotation={handleBacktestRotation}
-              onImportToManual={handleImportToManual}
-              backtestLoading={rotationLoading}
-            />
-          </div>
-          {/* Rotation backtest */}
-          {(rotationBacktest || rotationLoading) && (
-            <div style={{ width: '50%', overflow: 'hidden' }}>
-              <RotationPanel
-                backtest={rotationBacktest}
-                loading={rotationLoading}
-                topNHeld={rotationTopN}
-                onPortToManual={handlePortRotationToManual}
-              />
-            </div>
-          )}
-        </div>
-      )
-    }
+  // Show the Results/Forecast tab bar only when a portfolio backtest is present
+  const showRightTabs = !!(activeBacktest || activeLoading) && !screenResult && !rotationLoading
 
-    // AI mode — portfolio result
-    if (backtest || aiLoading) {
-      return (
-        <ResultsPanel
-          backtest={backtest}
-          portfolio={portfolio}
-          displayConfig={displayConfig}
-          loading={aiLoading}
-        />
-      )
-    }
-
-    // Empty state
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-center px-8">
-        <div className="mono text-5xl mb-6 opacity-20 select-none" style={{ color: 'var(--accent-blue)' }}>▷</div>
-        <h2 className="mono font-bold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>Results appear here</h2>
-        <p className="text-sm max-w-sm" style={{ color: 'var(--text-secondary)' }}>
-          Ask the AI to build a portfolio or screen assets by performance — results populate here instantly.
-        </p>
-      </div>
-    )
-  }
+  // Reset to Results tab whenever a new backtest arrives
+  useEffect(() => {
+    if (activeBacktest) setRightTab('results')
+  }, [activeBacktest])
 
   return (
     <div className="flex h-full">
@@ -317,7 +300,76 @@ export default function SplitView() {
         className="flex-1 flex flex-col overflow-hidden"
         style={{ background: 'var(--bg-primary)' }}
       >
-        <RightPanel />
+        {/* Results / Forecast tab bar — visible only when a portfolio backtest is active */}
+        {showRightTabs && (
+          <div
+            className="flex border-b px-2 overflow-x-auto"
+            style={{ borderColor: 'var(--border)', flexShrink: 0, scrollbarWidth: 'none', background: 'var(--bg-secondary)' }}
+          >
+            {RIGHT_TABS.map(tab => (
+              <RightTab
+                key={tab.id}
+                tab={tab}
+                active={rightTab === tab.id}
+                onClick={() => setRightTab(tab.id)}
+                disabled={tab.id === 'forecast' && !activeBacktest}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Screener view — no right tabs */}
+        {(screenResult || rotationLoading) ? (
+          <div className="flex flex-1 min-h-0 overflow-hidden">
+            <div className="flex-1 overflow-hidden border-r" style={{ borderColor: 'var(--border)' }}>
+              <ScreenerResults
+                screenResult={screenResult}
+                onBacktestRotation={handleBacktestRotation}
+                onImportToManual={handleImportToManual}
+                backtestLoading={rotationLoading}
+              />
+            </div>
+            {(rotationBacktest || rotationLoading) && (
+              <div style={{ width: '50%', overflow: 'hidden' }}>
+                <RotationPanel
+                  backtest={rotationBacktest}
+                  loading={rotationLoading}
+                  topNHeld={rotationTopN}
+                  onPortToManual={handlePortRotationToManual}
+                />
+              </div>
+            )}
+          </div>
+
+        ) : showRightTabs ? (
+          /* Portfolio backtest view — Results or Forecast tab */
+          <div className="flex-1 min-h-0 overflow-hidden">
+            {rightTab === 'results' && (
+              <ResultsPanel
+                backtest={activeBacktest}
+                portfolio={activePortfolio}
+                displayConfig={activeDisplay}
+                loading={activeLoading}
+              />
+            )}
+            {rightTab === 'forecast' && (
+              <ForecastPanel
+                backtest={activeBacktest}
+                portfolio={activePortfolio}
+              />
+            )}
+          </div>
+
+        ) : (
+          /* Empty state */
+          <div className="flex flex-col items-center justify-center h-full text-center px-8">
+            <div className="mono text-5xl mb-6 opacity-20 select-none" style={{ color: 'var(--accent-blue)' }}>▷</div>
+            <h2 className="mono font-bold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>Results appear here</h2>
+            <p className="text-sm max-w-sm" style={{ color: 'var(--text-secondary)' }}>
+              Ask the AI to build a portfolio or screen assets by performance — results populate here instantly.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   )

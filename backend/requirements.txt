@@ -11,3 +11,11 @@ httpx==0.27.2
 cachetools==5.5.0
 slowapi==0.1.9
 pandas-datareader==0.10.0
+# ── Forecast engine dependencies ──────────────────────────────────────────────
+arch>=6.3.0            # GARCH(1,1) — Engle (1982), Bollerslev (1986)
+hmmlearn>=0.3.2        # Hidden Markov Model — Hamilton (1989)
+scikit-learn>=1.4.0    # Ledoit-Wolf covariance, MinMaxScaler for LSTM
+statsmodels>=0.14.0    # VAR — Sims (1980), Campbell et al. (2003)
+# tensorflow-cpu>=2.16  # LSTM — uncomment if host has ≥2GB RAM available
+#                        # (Fischer & Krauss 2018; Gal & Ghahramani 2016)
+#                        # Railway Starter (512MB) may OOM — upgrade plan first

@@ -2,6 +2,76 @@
 
 ---
 
+## 2026-04-16 — Predictive Analytics: 6-Method Forecast Tab
+
+**What:** Added a new "Forecast" tab to the right results panel. Clicking it runs 6 research-backed probabilistic forecasting methods on the active portfolio, producing 12-month fan-band charts (p5/p25/p50/p75/p95) for each method.
+
+**Methods implemented:**
+
+1. **Monte Carlo (GBM)** — Black & Scholes (1973), Merton (1969). Constant drift/vol GBM, vectorised over 1,000 paths. Complexity: LOW.
+2. **GARCH(1,1)** — Engle (1982), Bollerslev (1986). Time-varying conditional volatility with bootstrapped fat-tail residuals. Ljung-Box OOS diagnostic. Complexity: MED.
+3. **Hidden Markov Model** — Hamilton (1989), Ang & Bekaert (2002). 2-state Bull/Bear HMM via Baum-Welch EM with 10 random restarts. Returns current regime probability and regime-conditional simulation. Complexity: MED.
+4. **Fama-French Factor Forecast** — Fama & French (2015), Cochrane (2011), Damodaran (2024). Replaces naive historical mean with factor-anchored expected return from FF5 loadings × consensus premia. Idiosyncratic vol as noise term. Complexity: LOW.
+5. **VAR Multi-Asset** — Sims (1980), Campbell et al. (2003). Vector autoregression on individual asset returns, portfolio reconstructed by weights. AIC lag selection; OOS residual covariance used for simulation. Granger-causality test badge. Complexity: MED.
+6. **LSTM Neural Net** — Fischer & Krauss (2018), Hochreiter & Schmidhuber (1997), Gal & Ghahramani (2016). LSTM(64)→LSTM(32)→Dense(1) with MC Dropout for Bayesian uncertainty bands. Complexity: HIGH.
+
+**Strict out-of-sample / anti-overfitting measures (Lopez de Prado, 2018; Bailey & Lopez de Prado, 2014):**
+- Walk-forward 80/20 train/test split on all parametric models (GARCH, HMM, VAR)
+- LSTM uses chronological 70/15/15 split with early stopping on validation loss (patience=10)
+- LSTM MC Dropout (training=True at inference) produces 200 stochastic passes for CI bands
+- No random k-fold anywhere — temporal ordering always preserved
+- OOS diagnostics returned per method and displayed in the UI (Ljung-Box, OOS R², OOS MSE)
+- Factor model uses 60+ year Ken French consensus premia instead of in-sample historical mean
+
+**Citation format:** Matched exactly to `FamaFrenchFactors.jsx` — `📄` footer on every card, `?` InfoTooltip with description + citations + OOS methodology note.
+
+**UI architecture:**
+- Two-phase fetch: Phase 1 (MC, GARCH, Factor ~1–2s) renders immediately; Phase 2 (HMM, VAR, LSTM ~10–40s) fills in after
+- Full-width composite chart: all 6 median lines overlaid with historical equity curve + vertical forecast-start marker
+- 2×3 card grid: each card has fan chart, metadata strip, citation footer, complexity badge, compute time
+- Forecast tab only shown when a portfolio backtest is active; resets to Results tab on new backtest
+
+**New backend files:**
+- `backend/app/models/forecast.py` — Pydantic request/response schemas
+- `backend/app/services/forecast_engine.py` — all 6 models with docstring references
+- `backend/app/routers/forecast.py` — `POST /api/forecast` endpoint
+
+**New frontend files:**
+- `frontend/src/hooks/useForecast.js` — two-phase fetch hook
+- `frontend/src/components/Dashboard/ForecastPanel.jsx` — tab container
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — fan chart card with citations
+- `frontend/src/components/Dashboard/ForecastComposite.jsx` — composite overlay chart
+
+**Modified files:**
+- `backend/app/main.py` — added forecast router
+- `backend/requirements.txt` — added arch, hmmlearn, scikit-learn, statsmodels (tensorflow-cpu commented out pending RAM check)
+- `frontend/src/components/Layout/SplitView.jsx` — Results/Forecast tab bar on right panel
+
+**Note on LSTM deployment:** `tensorflow-cpu` is commented out in `requirements.txt`. Railway Starter Plan has ~512MB RAM; TF CPU import footprint is ~450MB. Uncomment and upgrade to Pro plan ($5/mo, 8GB RAM) before enabling LSTM in production. All other 5 methods work without TF.
+
+---
+
+## 2026-04-16 — System prompt token optimisation
+
+**What:** Trimmed both AI system prompts by ~63% to reduce token spend on every cache-miss call.
+
+**UNIFIED_SYSTEM_PROMPT** (185 lines → 67 lines, ~1,200 tokens saved):
+- Removed all 3-example routing blocks per route
+- Metric guide: 5 verbose lines → 1 compact pipe-separated line
+- Universe guide: reformatted to dense no-quotes layout
+- Date range section: removed redundant enforcement examples (code handles this)
+- display_config.narrative template: 10-line code block → 1-line inline description
+- Backtest Integrity: 5 bullets → 2 compact lines
+
+**SCREENER_SYSTEM_PROMPT** in `screener_ai.py` (48 lines → 18 lines, ~600 tokens saved):
+- Same compression pattern — all key parameters now on single pipe-separated lines
+
+Both prompts retain `cache_control: {"type": "ephemeral"}` so savings apply on every cache miss (first call + any call after 5-minute TTL expiry).
+
+**Files modified:** `backend/app/services/unified_ai.py`, `backend/app/services/screener_ai.py`
+
+---
+
 ## 2026-04-13 — Fix long/short backtest engine: position-dollar tracking
 
 **What:** Dollar-neutral long/short portfolios (e.g. NVDA +1 / AMD -1) produced absurd results — weight drift chart showed ±6,000,000%, and the equity curve was also wrong.
