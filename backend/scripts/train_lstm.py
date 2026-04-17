@@ -34,6 +34,12 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
+try:
+    import tensorflow as tf
+    from tensorflow import keras
+except ImportError:
+    sys.exit("ERROR: TensorFlow not installed. Run: pip install tensorflow tensorflowjs")
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 SCRIPT_DIR   = Path(__file__).parent
 BACKEND_DIR  = SCRIPT_DIR.parent
@@ -95,7 +101,6 @@ class SumOverTime(keras.layers.Layer):
     and also exports correctly with tensorflowjs_converter.
     """
     def call(self, x):
-        import tensorflow as tf
         return tf.reduce_sum(x, axis=1)
 
     def get_config(self):
@@ -104,9 +109,6 @@ class SumOverTime(keras.layers.Layer):
 
 def build_attention_lstm(lookback: int, n_features: int, attn_units: int = 32):
     """Attention-LSTM with Bahdanau additive attention — pickle-safe, TF.js-compatible."""
-    import tensorflow as tf
-    from tensorflow import keras
-
     inputs = keras.Input(shape=(lookback, n_features), name="input")
 
     hidden = keras.layers.LSTM(
@@ -178,12 +180,6 @@ def main():
 
     # 3. Build model
     print("\n[3/5] Building Attention-LSTM architecture…")
-    try:
-        import tensorflow as tf
-        from tensorflow import keras
-    except ImportError:
-        sys.exit("ERROR: tensorflow not installed. Run: pip install tensorflow tensorflowjs")
-
     tf.random.set_seed(42)
     np.random.seed(42)
 
