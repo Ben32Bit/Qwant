@@ -85,16 +85,25 @@ def make_sequences(data: np.ndarray, lookback: int):
 
 # ── Model definition ──────────────────────────────────────────────────────────
 
+class SumOverTime(keras.layers.Layer):
+    """Sum (reduce) a (batch, T, D) tensor along the time axis → (batch, D).
+
+    Replaces tf.keras.layers.Lambda(lambda x: tf.reduce_sum(x, axis=1)).
+    Lambda layers capture the 'tf' module in their closure, which cannot be
+    pickled — causing 'TypeError: cannot pickle module object' during model.fit().
+    A proper Layer subclass has no external closure, so it serialises cleanly
+    and also exports correctly with tensorflowjs_converter.
+    """
+    def call(self, x):
+        import tensorflow as tf
+        return tf.reduce_sum(x, axis=1)
+
+    def get_config(self):
+        return super().get_config()
+
+
 def build_attention_lstm(lookback: int, n_features: int, attn_units: int = 32):
-    """
-    Attention-LSTM with Bahdanau additive attention.
-
-    Uses tf.keras.layers.Lambda(tf.reduce_sum) for the context vector sum.
-    This TF op exports cleanly with tensorflowjs_converter.
-
-    If TF.js conversion fails (rare), replace Lambda with GlobalAveragePooling1D
-    on the Multiply output (approximate but TF.js-safe).
-    """
+    """Attention-LSTM with Bahdanau additive attention — pickle-safe, TF.js-compatible."""
     import tensorflow as tf
     from tensorflow import keras
 
@@ -112,16 +121,12 @@ def build_attention_lstm(lookback: int, n_features: int, attn_units: int = 32):
     score = keras.layers.Dense(1, use_bias=False, name="attn_v")(score)   # (B, T, 1)
     alpha = keras.layers.Softmax(axis=1, name="attn_softmax")(score)       # (B, T, 1)
 
-    # Context vector: weighted sum over T
-    # Multiply: (B, T, 64) * (B, T, 1) broadcast → (B, T, 64)
+    # Context vector: element-wise weight × hidden, then sum over T → (B, 64)
     weighted = keras.layers.Multiply(name="weighted")([hidden, alpha])
-    # Sum over T axis → (B, 64)
-    context = keras.layers.Lambda(
-        lambda x: tf.reduce_sum(x, axis=1), name="context_sum"
-    )(weighted)
+    context  = SumOverTime(name="context_sum")(weighted)
 
-    x = keras.layers.Dropout(0.20, name="head_drop")(context)
-    x = keras.layers.Dense(32, activation="relu", name="head_dense")(x)
+    x   = keras.layers.Dropout(0.20, name="head_drop")(context)
+    x   = keras.layers.Dense(32, activation="relu", name="head_dense")(x)
     out = keras.layers.Dense(1, name="output")(x)
 
     return keras.Model(inputs=inputs, outputs=out, name="attention_lstm")
