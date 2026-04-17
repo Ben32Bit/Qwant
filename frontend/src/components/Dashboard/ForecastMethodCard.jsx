@@ -241,10 +241,9 @@ function getMetaItems(method, meta) {
       ]
     case 'lstm':
       return [
-        { label: 'params',   value: meta.n_params?.toLocaleString() },
-        { label: 'epochs',   value: meta.epochs_trained },
-        { label: 'val loss', value: fmt(meta.val_loss, 5) },
-        { label: 'OOS MSE',  value: fmt(meta.oos_mse, 5) },
+        { label: 'engine',    value: meta.client_side === false ? 'TF.js browser' : 'browser' },
+        { label: 'passes',    value: meta.dropout_passes ?? 200 },
+        { label: 'attention', value: meta.attention ? 'Bahdanau' : '—' },
       ]
     default:
       return []
@@ -253,7 +252,7 @@ function getMetaItems(method, meta) {
 
 // ── Main card ─────────────────────────────────────────────────────────────────
 
-export default function ForecastMethodCard({ result, loading, lastValue }) {
+export default function ForecastMethodCard({ result, loading, browserCompute, lastValue }) {
   const { method, label, color, forecast, metadata, error, compute_ms } = result ?? {}
   const complexity = COMPLEXITY[method] ?? { label: '—', color: 'var(--text-secondary)' }
   const citations  = CITATIONS[method] ?? []
@@ -270,10 +269,27 @@ export default function ForecastMethodCard({ result, loading, lastValue }) {
 
   if (loading && !forecast) {
     return (
-      <div className="rounded-lg border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
-        <div className="skeleton h-3 w-32 mb-3" />
-        <div className="skeleton h-40 w-full rounded" />
-        <div className="skeleton h-3 w-48 mt-3" />
+      <div className="rounded-lg border p-4 flex flex-col" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', minHeight: 220 }}>
+        {browserCompute ? (
+          <>
+            <div className="flex items-center gap-2 mb-3">
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: color ?? '#ff4757', display: 'inline-block' }} />
+              <span className="mono text-xs font-bold" style={{ color: 'var(--text-primary)' }}>{label}</span>
+            </div>
+            <div className="flex-1 flex flex-col items-center justify-center text-center">
+              <div className="mono text-xs mb-1" style={{ color: '#ff4757' }}>⟳ Computing in browser</div>
+              <div className="mono text-xs" style={{ color: 'var(--text-secondary)' }}>
+                200 MC Dropout passes · TensorFlow.js
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="skeleton h-3 w-32 mb-3" />
+            <div className="skeleton h-40 w-full rounded" />
+            <div className="skeleton h-3 w-48 mt-3" />
+          </>
+        )}
       </div>
     )
   }

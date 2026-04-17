@@ -10,10 +10,11 @@ const PHASE1_METHODS = new Set(['monte_carlo', 'garch', 'factor'])
 
 // Typical durations for the ETA bar (milliseconds)
 const PHASE1_EST_MS = 4_000
-const PHASE2_EST_MS = 75_000   // HMM + VAR + Attention-LSTM can take 30-90s
+const PHASE2_EST_MS = 20_000   // HMM + VAR (LSTM moved to browser, so much faster)
+const LSTM_EST_MS   = 5_000    // TF.js browser inference: ~2-5s
 
 // Placeholder cards while a phase is loading
-function LoadingCard({ method }) {
+function LoadingCard({ method, browserCompute = false }) {
   const LABELS = {
     monte_carlo: 'Monte Carlo (GBM)',
     garch:       'GARCH(1,1)',
@@ -30,6 +31,7 @@ function LoadingCard({ method }) {
     <ForecastMethodCard
       result={{ method, label: LABELS[method], color: COLORS[method] }}
       loading
+      browserCompute={browserCompute}
       lastValue={null}
     />
   )
@@ -37,67 +39,61 @@ function LoadingCard({ method }) {
 
 // ── ETA Progress Bar ──────────────────────────────────────────────────────────
 
-function EtaBar({ loading, p1StartRef, p2StartRef, timing }) {
+function EtaBar({ loading, p1StartRef, p2StartRef, lstmStartRef, timing }) {
   const [elapsed, setElapsed] = useState(0)
 
-  // Tick every 250ms while any phase is running
+  const activePhase = loading.phase1 ? 'p1' : loading.phase2 ? 'p2' : loading.lstm ? 'lstm' : null
+
   useEffect(() => {
-    if (!loading.phase1 && !loading.phase2) {
-      setElapsed(0)
-      return
-    }
-    const startRef = loading.phase1 ? p1StartRef : p2StartRef
+    if (!activePhase) { setElapsed(0); return }
+    const startRef = activePhase === 'p1' ? p1StartRef : activePhase === 'p2' ? p2StartRef : lstmStartRef
     const tick = () => setElapsed(Date.now() - (startRef.current ?? Date.now()))
     tick()
     const id = setInterval(tick, 250)
     return () => clearInterval(id)
-  }, [loading.phase1, loading.phase2, p1StartRef, p2StartRef])
+  }, [activePhase, p1StartRef, p2StartRef, lstmStartRef])
 
-  if (!loading.phase1 && !loading.phase2) return null
+  if (!activePhase) return null
 
-  const estMs    = loading.phase1 ? PHASE1_EST_MS : PHASE2_EST_MS
-  const progress = Math.min(elapsed / estMs, 0.97)   // never fill completely while pending
+  const estMs    = activePhase === 'p1' ? PHASE1_EST_MS : activePhase === 'p2' ? PHASE2_EST_MS : LSTM_EST_MS
+  const progress = Math.min(elapsed / estMs, 0.97)
   const etaMs    = Math.max(0, estMs - elapsed)
 
-  const fmtEta = (ms) => {
-    if (ms >= 60_000) return `~${Math.ceil(ms / 60_000)}m`
-    return `~${Math.ceil(ms / 1_000)}s`
-  }
+  const fmtEta = ms => ms >= 60_000 ? `~${Math.ceil(ms / 60_000)}m` : `~${Math.ceil(ms / 1_000)}s`
 
-  const phase = loading.phase1 ? 1 : 2
-  const methods = loading.phase1
+  const phaseLabel = activePhase === 'p1' ? 'Phase 1 (server)' : activePhase === 'p2' ? 'Phase 2 (server)' : 'Phase 2 (browser)'
+  const methods = activePhase === 'p1'
     ? 'Monte Carlo · GARCH · Factor Model'
-    : 'Hidden Markov Model · VAR · Attention-LSTM'
+    : activePhase === 'p2'
+    ? 'Hidden Markov Model · VAR'
+    : 'Attention-LSTM · TF.js MC Dropout'
+
+  const color = activePhase === 'lstm' ? 'var(--accent-red)' : 'var(--accent-blue)'
+  const gradient = activePhase === 'lstm'
+    ? 'linear-gradient(90deg, #ff4757, #a855f7)'
+    : 'linear-gradient(90deg, var(--accent-blue), #00d4aa)'
 
   return (
     <div className="rounded-lg border px-4 py-3"
-      style={{ borderColor: 'rgba(74,158,255,0.2)', background: 'rgba(74,158,255,0.04)' }}>
-      {/* Label row */}
+      style={{ borderColor: `${color}33`, background: `${color}0a` }}>
       <div className="flex items-center justify-between mb-2">
-        <span className="mono text-xs" style={{ color: 'var(--accent-blue)' }}>
-          ⟳ Phase {phase}: {methods}
+        <span className="mono text-xs" style={{ color }}>
+          ⟳ {phaseLabel}: {methods}
         </span>
-        <span className="mono text-xs font-bold" style={{ color: 'var(--accent-blue)' }}>
+        <span className="mono text-xs font-bold" style={{ color }}>
           ETA {fmtEta(etaMs)}
         </span>
       </div>
-
-      {/* Progress bar */}
       <div className="rounded-full overflow-hidden" style={{ height: 4, background: 'var(--border)' }}>
-        <div
-          className="h-full rounded-full transition-all"
-          style={{
-            width: `${progress * 100}%`,
-            background: 'linear-gradient(90deg, var(--accent-blue), #00d4aa)',
-            transition: 'width 0.25s linear',
-          }}
+        <div className="h-full rounded-full"
+          style={{ width: `${progress * 100}%`, background: gradient, transition: 'width 0.25s linear' }}
         />
       </div>
-
-      {/* Phase 2 note when phase 1 results are already shown */}
-      {loading.phase2 && (
+      {(loading.phase2 || loading.lstm) && (
         <p className="mono text-xs mt-2" style={{ color: 'rgba(136,136,160,0.7)' }}>
-          Phase 1 results shown below. ML methods will appear when ready.
+          {loading.lstm
+            ? 'Running 200 MC Dropout passes in your browser — no server cost.'
+            : 'Phase 1 results shown below. HMM · VAR loading from server.'}
         </p>
       )}
     </div>
@@ -107,10 +103,10 @@ function EtaBar({ loading, p1StartRef, p2StartRef, timing }) {
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export default function ForecastPanel({ backtest, portfolio }) {
-  const { results, meta, loading, error, run, hasData, timing, p1StartRef, p2StartRef } =
+  const { results, meta, loading, error, run, hasData, timing, p1StartRef, p2StartRef, lstmStartRef } =
     useForecast(backtest, portfolio)
 
-  const isRunning = loading.phase1 || loading.phase2
+  const isRunning = loading.phase1 || loading.phase2 || loading.lstm
 
   // Last historical portfolio value — anchor for projecting actual dollar values
   const lastValue = backtest?.equity_curve?.at(-1)?.value ?? null
@@ -161,6 +157,7 @@ export default function ForecastPanel({ backtest, portfolio }) {
             loading={loading}
             p1StartRef={p1StartRef}
             p2StartRef={p2StartRef}
+            lstmStartRef={lstmStartRef}
             timing={timing}
           />
         )}
@@ -205,8 +202,9 @@ export default function ForecastPanel({ backtest, portfolio }) {
               const inPhase1 = PHASE1_METHODS.has(method)
               const inPhase2 = PHASE2_METHODS.has(method)
 
-              if (!result && ((inPhase1 && loading.phase1) || (inPhase2 && loading.phase2))) {
-                return <LoadingCard key={method} method={method} />
+              const isLstmBrowserLoading = method === 'lstm' && loading.lstm
+              if (!result && ((inPhase1 && loading.phase1) || (inPhase2 && loading.phase2) || isLstmBrowserLoading)) {
+                return <LoadingCard key={method} method={method} browserCompute={isLstmBrowserLoading} />
               }
               if (!result) return null
               return (

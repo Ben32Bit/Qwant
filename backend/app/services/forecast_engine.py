@@ -44,7 +44,6 @@ Harvey, C.R., Liu, Y., & Zhu, H. (2016). ... and the Cross-Section of
 from __future__ import annotations
 
 import time
-import hashlib
 import logging
 from datetime import date, timedelta
 from typing import Optional
@@ -659,146 +658,51 @@ def forecast_var(
     }
 
 
-# ── 6. Attention-LSTM Neural Network ─────────────────────────────────────────
+# ── 6. Attention-LSTM — Client-Side Feature Preparation ──────────────────────
+#
+# The Attention-LSTM now runs IN THE USER'S BROWSER via TensorFlow.js.
+# This eliminates the ~450MB tensorflow-cpu server RAM cost and keeps
+# Railway free-tier usage well under the 512MB limit.
+#
+# The server's role is ONLY feature engineering:
+#   1. Compute the 5-feature matrix from the portfolio's return series
+#   2. Fit a per-portfolio MinMaxScaler
+#   3. Return the last 60-day scaled window + scaler parameters
+#
+# The browser then loads the pre-trained TF.js model (served as static assets
+# by Vercel from frontend/public/models/lstm/) and runs 200 MC Dropout passes.
+#
+# Training script: backend/scripts/train_lstm.py
+# TF.js model:    frontend/public/models/lstm/model.json
+#
+# Architecture (unchanged from prior server implementation):
+#   Input(60, 5) → LSTM(64, return_sequences=True)
+#   → Bahdanau attention → context ∈ ℝ⁶⁴
+#   → Dropout(0.20) → Dense(32, relu) → Dense(1)
+#
+# References
+# ----------
+# CS230 Stanford (2020). https://cs230.stanford.edu/projects_winter_2020/reports/32066186.pdf
+# Bahdanau, Cho & Bengio (2015, ICLR). arXiv:1409.0473
+# Gal & Ghahramani (2016, ICML). MC Dropout as Bayesian Approximation.
+# Fischer & Krauss (2018, EJOR). LSTM for financial market prediction.
 
-# Model cache: {hash: (model, history)}  — avoids retraining on identical data
-_LSTM_CACHE: dict = {}
-
-def _returns_hash(r: pd.Series) -> str:
-    return hashlib.md5(r.values.tobytes()).hexdigest()
-
-
-def _build_attention_lstm(lookback: int, n_features: int, attn_units: int = 32):
-    """
-    Temporal Attention-LSTM for sequence-to-one return forecasting.
-
-    Architecture
-    ------------
-    Input(lookback, n_features)
-      → LSTM(64, return_sequences=True, dropout=0.20, recurrent_dropout=0.10)
-                     ↓  all hidden states H = [h₁,…,h_T]  ∈ ℝ^(T×64)
-      → Bahdanau attention:
-            eₜ = vᵀ · tanh(Wₐ · hₜ)            alignment score
-            α  = softmax(e)                        attention weights
-            c  = Σ αₜ · hₜ                         context vector ∈ ℝ^64
-      → Dropout(0.20) → Dense(32, relu) → Dense(1)
-
-    The attention mechanism lets the model selectively weight past hidden
-    states, focussing on regime-relevant windows rather than treating all
-    timesteps equally — critical for financial data with volatility clusters
-    and trend breaks.
-
-    Reference
-    ---------
-    CS230 Stanford (2020). Predicting Stock Market Returns Using Temporal
-      Attention-Enhanced LSTM. Winter 2020 Project Reports.
-      https://cs230.stanford.edu/projects_winter_2020/reports/32066186.pdf
-
-    Bahdanau, D., Cho, K., & Bengio, Y. (2015). Neural machine translation
-      by jointly learning to align and translate. ICLR 2015.
-      https://arxiv.org/abs/1409.0473
-
-    Hochreiter, S. & Schmidhuber, J. (1997). Long short-term memory.
-      Neural Computation, 9(8), 1735–1780.
-      https://doi.org/10.1162/neco.1997.9.8.1735
-    """
-    import tensorflow as tf
-    from tensorflow import keras
-
-    inputs = keras.Input(shape=(lookback, n_features), name="sequence_input")
-
-    # LSTM encoder — return all hidden states for attention
-    hidden = keras.layers.LSTM(
-        64, return_sequences=True,
-        dropout=0.20, recurrent_dropout=0.10,
-        name="lstm_encoder",
-    )(inputs)                                          # (batch, T, 64)
-
-    # Bahdanau additive attention
-    # eₜ = vᵀ · tanh(Wₐ · hₜ)
-    score = keras.layers.Dense(attn_units, use_bias=False, name="attn_W")(hidden)
-    score = keras.layers.Activation("tanh", name="attn_tanh")(score)
-    score = keras.layers.Dense(1, use_bias=False, name="attn_v")(score)      # (batch, T, 1)
-    attn_weights = keras.layers.Softmax(axis=1, name="attn_softmax")(score)  # (batch, T, 1)
-
-    # Context vector: weighted sum of hidden states
-    context = keras.layers.Multiply(name="attn_context")([hidden, attn_weights])  # (batch, T, 64)
-    context = keras.layers.Lambda(
-        lambda x: tf.reduce_sum(x, axis=1), name="attn_sum"
-    )(context)                                         # (batch, 64)
-
-    # Output head
-    x = keras.layers.Dropout(0.20, name="head_dropout")(context)
-    x = keras.layers.Dense(32, activation="relu", name="head_dense")(x)
-    output = keras.layers.Dense(1, name="output")(x)
-
-    return keras.Model(inputs=inputs, outputs=output, name="attention_lstm")
-
-
-def forecast_lstm(
+def prepare_lstm_features(
     returns: pd.Series,
     horizon: int,
-    n_dropout_passes: int,
     last_date: str,
 ) -> dict:
     """
-    Attention-LSTM with MC Dropout — Bayesian uncertainty via stochastic inference.
+    Prepare scaled feature window for client-side Attention-LSTM inference.
 
-    Replaces the stacked LSTM with a single encoder + Bahdanau temporal attention,
-    allowing the model to selectively focus on the most relevant past timesteps
-    when predicting future returns. This is especially important for financial
-    series where volatility clustering means recent regimes should receive more
-    weight than distant history.
+    Computes [return, vol_21d, mom_5d, mom_21d, rsi_14] features from the
+    portfolio's return series, fits a per-portfolio MinMaxScaler, and returns:
+      - last_window: the final LOOKBACK rows of scaled features (60 × 5)
+      - scaler_min / scaler_max: per-feature bounds for client-side inverse transform
+      - forecast_dates: pre-computed business-day forecast dates
 
-    Features (per timestep)
-    -----------------------
-    [daily_return, 21d_vol, 5d_momentum, 21d_momentum, RSI-14]
-
-    Out-of-sample validation
-    ------------------------
-    Chronological 70 / 15 / 15 train / val / test split.
-    Early stopping on val loss (patience=10). Random k-fold is never used
-    — it violates temporal ordering (Lopez de Prado, 2018, Ch. 7).
-
-    MC Dropout inference: dropout active at test time (training=True).
-    n_dropout_passes stochastic forward passes → percentile fan bands.
-
-    References
-    ----------
-    CS230 Stanford (2020). Predicting Stock Market Returns Using Temporal
-      Attention-Enhanced LSTM. Winter 2020 Project Reports.
-      https://cs230.stanford.edu/projects_winter_2020/reports/32066186.pdf
-
-    Bahdanau, D., Cho, K., & Bengio, Y. (2015). Neural machine translation
-      by jointly learning to align and translate. ICLR 2015.
-      https://arxiv.org/abs/1409.0473
-
-    Fischer, T. & Krauss, C. (2018). Deep learning with long short-term
-      memory networks for financial market predictions. European Journal
-      of Operational Research, 270(2), 654–669.
-      https://doi.org/10.1016/j.ejor.2017.11.054
-
-    Gal, Y. & Ghahramani, Z. (2016). Dropout as a Bayesian approximation:
-      representing model uncertainty in deep learning. Proceedings of the
-      33rd ICML, 1050–1059.
-      https://proceedings.mlr.press/v48/gal16.html
-
-    Out-of-sample methodology
-    --------------------------
-    Lopez de Prado, M. (2018). Advances in Financial Machine Learning,
-      Ch. 7. Walk-forward (expanding window) CV; no random k-fold.
-    Bailey, D.H. & Lopez de Prado, M. (2014). The Deflated Sharpe Ratio.
-      Journal of Portfolio Management, 40(5), 94–107.
+    The browser uses these to seed the MC Dropout inference loop in LSTMInferer.js.
     """
-    try:
-        import tensorflow as tf
-        from tensorflow import keras
-    except ImportError:
-        raise RuntimeError(
-            "TensorFlow is not installed. Add 'tensorflow-cpu' to requirements.txt."
-        )
-
-    t0       = time.time()
     LOOKBACK = 60
     MIN_OBS  = LOOKBACK + 90
 
@@ -808,8 +712,9 @@ def forecast_lstm(
             f"got {len(returns)}. Try a longer backtest date range."
         )
 
-    # ── Feature engineering ────────────────────────────────────────────────
-    r = returns.copy()
+    from sklearn.preprocessing import MinMaxScaler
+
+    r  = returns.copy()
     df = pd.DataFrame({"r": r})
     df["vol_21d"]  = r.rolling(21).std() * np.sqrt(TRADING_DAYS)
     df["mom_5d"]   = r.rolling(5).sum()
@@ -820,95 +725,19 @@ def forecast_lstm(
     df["rsi_14"]   = gain / (gain + loss + 1e-9)
     df = df.dropna()
 
-    from sklearn.preprocessing import MinMaxScaler
-
     feat_cols = ["r", "vol_21d", "mom_5d", "mom_21d", "rsi_14"]
     scaler    = MinMaxScaler(feature_range=(-1, 1))
     scaled    = scaler.fit_transform(df[feat_cols].values)
 
-    def make_sequences(data):
-        X, y = [], []
-        for i in range(LOOKBACK, len(data)):
-            X.append(data[i - LOOKBACK:i])
-            y.append(data[i, 0])
-        return np.array(X), np.array(y)
+    last_window    = scaled[-LOOKBACK:].tolist()    # (60, 5)
+    forecast_dates = _forecast_dates(last_date, horizon)
 
-    # Chronological 70 / 15 / 15 split
-    n       = len(scaled)
-    n_train = int(n * 0.70)
-    n_val   = int(n * 0.15)
-    X_tr,  y_tr  = make_sequences(scaled[:n_train])
-    X_val, y_val = make_sequences(scaled[n_train:n_train + n_val])
-    X_te,  y_te  = make_sequences(scaled[n_train + n_val:])
-
-    # ── Build or retrieve cached model ────────────────────────────────────
-    rhash = _returns_hash(returns)
-    if rhash not in _LSTM_CACHE:
-        tf.random.set_seed(42)
-        model = _build_attention_lstm(LOOKBACK, len(feat_cols))
-        model.compile(optimizer=keras.optimizers.Adam(1e-3), loss="mse")
-
-        es = keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=10, restore_best_weights=True,
-        )
-        history = model.fit(
-            X_tr, y_tr,
-            validation_data=(X_val, y_val),
-            epochs=100,
-            batch_size=32,
-            callbacks=[es],
-            verbose=0,
-        )
-        _LSTM_CACHE[rhash] = (model, history)
-
-    model, history = _LSTM_CACHE[rhash]
-
-    val_loss = float(min(history.history.get("val_loss", [float("nan")])))
-    n_epochs = len(history.history.get("loss", []))
-    n_params = int(model.count_params())
-
-    # OOS test performance (held-out 15%)
-    oos_preds = model(X_te, training=False).numpy().flatten()
-    oos_mse   = float(np.mean((oos_preds - y_te) ** 2))
-
-    # ── MC Dropout inference ───────────────────────────────────────────────
-    seed_window = scaled[-LOOKBACK:].copy()
-    all_paths   = np.zeros((horizon, n_dropout_passes))
-
-    for pass_i in range(n_dropout_passes):
-        window = seed_window.copy()
-        cum_r  = 0.0
-        for t in range(horizon):
-            x_in  = window[np.newaxis, ...]              # (1, LOOKBACK, features)
-            r_hat = float(model(x_in, training=True).numpy()[0, 0])   # dropout ON
-            tmp       = np.zeros((1, len(feat_cols)))
-            tmp[0, 0] = r_hat
-            r_real    = float(scaler.inverse_transform(tmp)[0, 0])
-            cum_r     = (1 + cum_r) * (1 + r_real) - 1
-            all_paths[t, pass_i] = cum_r
-            new_row    = window[-1].copy()
-            new_row[0] = r_hat
-            window     = np.vstack([window[1:], new_row])
-
-    dates = _forecast_dates(last_date, horizon)
-    band  = _paths_to_band(all_paths, dates)
     return {
-        "band": band,
-        "metadata": {
-            "architecture":   "Attention-LSTM(64) → Dense(32) → Dense(1)",
-            "attention":      "Bahdanau additive (CS230 2020)",
-            "lookback_days":  LOOKBACK,
-            "train_n":        len(X_tr),
-            "val_n":          len(X_val),
-            "test_n":         len(X_te),
-            "n_params":       n_params,
-            "epochs_trained": n_epochs,
-            "val_loss":       round(val_loss, 6),
-            "oos_mse":        round(oos_mse, 6),
-            "dropout_passes": n_dropout_passes,
-            "split":          "70/15/15 chronological",
-        },
-        "compute_ms": int((time.time() - t0) * 1000),
+        "last_window":    last_window,
+        "scaler_min":     scaler.data_min_.tolist(),
+        "scaler_max":     scaler.data_max_.tolist(),
+        "feature_names":  feat_cols,
+        "forecast_dates": forecast_dates,
     }
 
 
@@ -963,17 +792,20 @@ def run_all_forecasts(req) -> dict:
                     raise ValueError("Asset prices unavailable for VAR")
                 out = forecast_var(asset_returns, weights_dict, h, np_, last_date)
             elif method == "lstm":
-                out = forecast_lstm(returns, h, min(200, np_), last_date)
-            else:
-                raise ValueError(f"Unknown method: {method}")
-
-            band_data = out["band"]
-            results.append(MethodResult(
-                method=method, label=label, color=color,
-                forecast=ForecastBand(**band_data),
-                metadata=out["metadata"],
-                compute_ms=out["compute_ms"],
-            ))
+                # LSTM runs client-side in the browser via TF.js (Phase 1 upgrade).
+                # Server returns feature window + scaler params; no forecast band here.
+                out = prepare_lstm_features(returns, h, last_date)
+                results.append(MethodResult(
+                    method=method, label=label, color=color,
+                    forecast=None,
+                    metadata={
+                        "client_side":   True,
+                        "lstm_features": out,
+                        "architecture":  "Attention-LSTM(64) → Dense(32) → Dense(1)",
+                        "attention":     "Bahdanau additive (CS230 2020)",
+                    },
+                ))
+                continue
 
         except Exception as e:
             logger.warning("Forecast method %s failed: %s", method, e)

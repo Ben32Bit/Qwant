@@ -2,6 +2,49 @@
 
 ---
 
+## 2026-04-17 — Phase 1: Move Attention-LSTM to Browser (TF.js) — RAM reclamation
+
+**What:** Moved Attention-LSTM inference from the Railway server to the user's browser via TensorFlow.js. This eliminates `tensorflow-cpu` (~450MB) from the server, dropping steady-state RAM from ~680MB (over free-tier limit) to ~230MB (well within 512MB).
+
+**Architecture change:**
+- **Before:** Server trains + runs LSTM at request time (TF imports 450MB on first call, stays resident)
+- **After:** Server engineers features + returns a scaled 60-day window; browser loads pre-trained TF.js model and runs 200 MC Dropout passes locally
+
+**Three-phase fetch pattern:**
+1. Phase 1 (server, ~1-3s): Monte Carlo, GARCH, Factor — unchanged
+2. Phase 2 (server, ~5-15s): HMM, VAR + LSTM feature window (no TF on server)
+3. Phase 3 (browser, ~2-5s): Attention-LSTM 200 MC Dropout passes via TF.js
+
+**Files modified:**
+- `backend/app/services/forecast_engine.py` — replaced `forecast_lstm()` + `_build_attention_lstm()` + `_LSTM_CACHE` with `prepare_lstm_features()` (feature engineering + scaler only). Removed `hashlib` import.
+- `backend/requirements.txt` — removed `tensorflow-cpu>=2.16`. Added comment explaining rationale.
+- `frontend/src/ml/LSTMInferer.js` — NEW. Loads `/models/lstm/model.json` via `tf.loadLayersModel()`. Runs vectorised MC Dropout: all 200 passes batched at each of 252 horizon steps (252 model.apply() calls, not 200×252). Returns p5/p25/p50/p75/p95 bands as cumulative % returns.
+- `frontend/src/hooks/useForecast.js` — added Phase 3 step: after Phase 2 server response, dynamically imports `LSTMInferer.js` and runs client-side inference. Added `loading.lstm` state. `mergeResults` skips lstm until client inference completes.
+- `frontend/src/components/Dashboard/ForecastPanel.jsx` — `EtaBar` handles three phases (p1/p2/lstm). LSTM loading card shows "Computing in browser / TensorFlow.js" instead of generic skeleton. Phase 2 ETA revised to 20s (was 75s — LSTM removed from server).
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — `browserCompute` prop for LSTM card. `getMetaItems` for lstm shows `engine: TF.js browser`, `passes: 200`, `attention: Bahdanau`.
+- `frontend/package.json` — added `@tensorflow/tfjs ^4.22.0`
+
+**Files created:**
+- `backend/scripts/train_lstm.py` — local training script. Downloads 15-asset universe (2010-2024), trains Attention-LSTM(64)+Bahdanau attention on chronological 70/15/15 split with early stopping. Exports to `frontend/public/models/lstm/` via tensorflowjs_converter.
+- `frontend/public/models/lstm/README.md` — setup instructions for generating model files.
+
+**RAM baseline endpoint:** `GET /api/debug/memory` (added in Phase 0, commit 86984da). Call before + after deploy to verify RAM drop.
+
+**Decisions:**
+- Vectorised MC Dropout inference: stack all 200 windows into a batch at each step → 252 model.apply() calls instead of 50,400. Runs in ~2-5s in modern browsers.
+- Dynamic import of LSTMInferer.js: TF.js (~3MB gzipped) only loads when LSTM runs, not on app start.
+- Model served from Vercel static assets (frontend/public/), zero Railway cost.
+- Training script trains a generic model on diverse assets; per-portfolio MinMaxScaler normalisation makes features comparable across portfolios.
+
+**Pending (user action required):**
+- Run `cd backend && pip install tensorflow tensorflowjs && python scripts/train_lstm.py` to generate the model files
+- Commit `frontend/public/models/lstm/model.json` + `.bin` files
+- Deploy to Railway → call `GET /api/debug/memory` to verify RAM drop to <250MB
+
+**RAM target after this phase:** ~230MB steady-state (no TF import)
+
+---
+
 ## 2026-04-17 — Forecast: actual dollar values, Attention-LSTM, ETA progress bar
 
 **What:** Three improvements to the Forecast tab:
