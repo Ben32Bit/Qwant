@@ -121,3 +121,16 @@ app.include_router(forecast.router, prefix="/api")
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/debug/memory")
+async def debug_memory():
+    """Returns current process RSS memory in MB — used for RAM baseline auditing."""
+    import psutil
+    proc = psutil.Process()
+    mem  = proc.memory_info()
+    return {
+        "rss_mb":  round(mem.rss  / 1024 / 1024, 1),
+        "vms_mb":  round(mem.vms  / 1024 / 1024, 1),
+        "pid":     proc.pid,
+    }
