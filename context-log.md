@@ -2,6 +2,16 @@
 
 ---
 
+## 2026-04-19 — Fix: rate_limit.py startup crash (list vs string)
+
+**Root cause:** `os.getenv(...).split(";")` returned a Python list (`["10/hour", "50/day"]`). slowapi 0.1.9's `@limiter.limit()` decorator expects a plain string, not a list — it called string methods on the list at decoration time, raising `TypeError` before uvicorn could bind, so Railway's healthcheck at `/health` never got a response.
+
+**Fix:** Removed `.split(";")` from `rate_limit.py`; limits are now plain strings (`"10/hour"` etc.). Daily caps removed for now — the hourly limit is the primary bot protection and is sufficient. Updated `.env.example` to match.
+
+**Files:** `backend/app/utils/rate_limit.py`, `backend/.env.example`
+
+---
+
 ## 2026-04-19 — Rate limiting hardened across all endpoints
 
 **What:** Every API endpoint now has per-IP rate limits to protect Anthropic token spend when sharing the app publicly.

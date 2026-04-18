@@ -8,6 +8,7 @@ Limits (all per-IP, in-memory):
   GLOBAL_LIMIT — default cap applied to every route that uses this limiter
 
 All values are configurable via environment variables.
+slowapi 0.1.9 requires plain strings ("N/period"), not lists.
 """
 import os
 from slowapi import Limiter
@@ -15,18 +16,16 @@ from slowapi.util import get_remote_address
 
 # ── Configurable limits ───────────────────────────────────────────────────────
 # AI endpoints — each call may cost $0.003–0.01 in Anthropic tokens.
-# 10/hour   ≈ comfortable for a human, painful for a bot
-# 50/day    ≈ $0.25–0.50 max spend per IP per day
-AI_LIMITS   = os.getenv("AI_RATE_LIMIT",       "10/hour;50/day").split(";")
+# 10/hour ≈ comfortable for a human, painful for a bot.
+AI_LIMITS   = os.getenv("AI_RATE_LIMIT",       "10/hour")
 
-# Forecast — two server calls per full run (phase 1 + phase 2); no Anthropic cost
-# 12/hour   ≈ 6 full forecast runs / hour per IP
-FCST_LIMITS = os.getenv("FORECAST_RATE_LIMIT", "12/hour;40/day").split(";")
+# Forecast — 2 server calls per full run (phase 1 + 2) → 6 full runs/hour.
+FCST_LIMITS = os.getenv("FORECAST_RATE_LIMIT", "12/hour")
 
-# Compute-only endpoints — no AI cost, just CPU
-CMPT_LIMITS = os.getenv("COMPUTE_RATE_LIMIT",  "30/hour;120/day").split(";")
+# Compute-only endpoints — no AI cost, just CPU.
+CMPT_LIMITS = os.getenv("COMPUTE_RATE_LIMIT",  "30/hour")
 
-# Global safety net — applied to every route via default_limits
+# Global safety net — applied to every route via default_limits.
 GLOBAL_LIMIT = os.getenv("GLOBAL_RATE_LIMIT",  "200/hour")
 
 # ── Shared limiter instance ───────────────────────────────────────────────────
