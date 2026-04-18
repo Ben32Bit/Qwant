@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useForecast } from '../../hooks/useForecast.js'
 import ForecastComposite from './ForecastComposite.jsx'
 import ForecastMethodCard from './ForecastMethodCard.jsx'
+import SentimentPanel from './SentimentPanel.jsx'
 
 const METHOD_ORDER = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
 
@@ -113,7 +114,7 @@ function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, 
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export default function ForecastPanel({ backtest, portfolio }) {
-  const { results, meta, loading, error, run, hasData, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef } =
+  const { results, meta, loading, error, run, hasData, newsContext, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef } =
     useForecast(backtest, portfolio)
 
   const isRunning = loading.phase1 || loading.xgb || loading.nbeats || loading.phase2 || loading.lstm
@@ -237,6 +238,9 @@ export default function ForecastPanel({ backtest, portfolio }) {
             })}
           </div>
         )}
+
+        {/* FinBERT sentiment — Phase 4B */}
+        {hasData && <SentimentPanel newsContext={newsContext} />}
 
         {/* OOS methodology footer */}
         {hasData && (

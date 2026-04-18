@@ -47,3 +47,5 @@ class ForecastResponse(BaseModel):
     forecast_end: str
     historical_end_value: float
     results: list[MethodResult]
+    news_context: Optional[dict] = None    # per-ticker GDELT headlines for browser FinBERT
+    tier2_context: Optional[dict] = None   # reddit + trends aggregate for method metadata

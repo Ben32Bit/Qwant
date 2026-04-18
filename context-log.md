@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-04-18 — Phase 4: Tier 2 Data Providers + Client-Side FinBERT
+
+**What:** Added GDELT news, Reddit mention velocity, Google Trends, and browser-side FinBERT sentiment scoring.
+
+**New backend files:**
+- `backend/app/services/news_provider.py` — GDELT 2.0 DOC API, no packages, 12h cache. Returns per-ticker headlines for FinBERT.
+- `backend/app/services/reddit_provider.py` — Reddit public JSON API (no auth), 3h cache. Returns 7-day mention count + avg score.
+- `backend/app/services/trends_provider.py` — pytrends Google Trends, 24h cache. Returns 7-day z-score vs 90-day baseline.
+
+**New frontend files:**
+- `frontend/src/ml/SentimentInferer.js` — loadFinBERT, scoreHeadlines, aggregateScores, deviceCanRunFinBERT. Uses @xenova/transformers v2 (Xenova/finbert, ~80MB, cached in IndexedDB).
+- `frontend/src/components/Dashboard/SentimentPanel.jsx` — idle→can_run→downloading→scoring→done state machine. Shows per-ticker sentiment bars with net score ∈ [-1,+1].
+
+**Updated backend files:**
+- `forecast.py` model — added `news_context`, `tier2_context` fields to ForecastResponse.
+- `forecast_engine.py` — Tier 2 fetch after Tier 1; `_portfolio_reddit()` + `_portfolio_trends()` aggregate helpers; reddit/trends injected into XGBoost, HMM, LSTM metadata; news_context at response level.
+- `requirements.txt` — added pytrends>=4.9.2.
+
+**Updated frontend files:**
+- `vite.config.js` — exclude @xenova/transformers from pre-bundling (uses dynamic WASM/Workers).
+- `package.json` — added @xenova/transformers@^2.17.2.
+- `useForecast.js` — extracts news_context from phase1 response, exposes as `newsContext`.
+- `ForecastPanel.jsx` — renders SentimentPanel below method cards grid.
+- `ForecastMethodCard.jsx` — XGBoost meta: WSB mentions + trends z-score + article count; HMM meta: trends z-score + article count; LSTM meta: trends z-score + article count.
+
+**Tier 2 routing:**
+| Source | XGBoost | HMM | LSTM | N-BEATS | Factor | GP |
+|--------|---------|-----|------|---------|--------|----|
+| FinBERT (browser) | ✓ SentimentPanel | ✓ SentimentPanel | ✓ SentimentPanel | ✓ SentimentPanel | — | — |
+| Reddit | ✓ metadata | — | — | — | — | — |
+| Google Trends | ✓ metadata | ✓ metadata | ✓ metadata | — | — | — |
+| Article count | ✓ metadata | ✓ metadata | ✓ metadata | — | — | — |
+
+---
+
 ## 2026-04-18 — Phase 3E: Route Tier 1 Data to HMM, Factor, GP, N-BEATS
 
 **What:** Macro/VIX context now flows to all forecast methods, not just XGBoost.

@@ -898,6 +898,56 @@ def prepare_lstm_features(
     }
 
 
+# ── Tier 2 portfolio-level aggregators ───────────────────────────────────────
+
+def _portfolio_reddit(reddit_ctx: dict, weights: dict) -> dict | None:
+    """Weighted-average Reddit mention count and score across portfolio tickers."""
+    if not reddit_ctx:
+        return None
+    total_w = sum(abs(w) for t, w in weights.items() if reddit_ctx.get(t, {}).get("available"))
+    if total_w == 0:
+        return None
+    mentions = sum(
+        reddit_ctx[t]["mention_count_7d"] * abs(w)
+        for t, w in weights.items()
+        if reddit_ctx.get(t, {}).get("available")
+    ) / total_w
+    scores = sum(
+        reddit_ctx[t]["avg_score_7d"] * abs(w)
+        for t, w in weights.items()
+        if reddit_ctx.get(t, {}).get("available")
+    ) / total_w
+    return {
+        "portfolio_mentions_7d": round(mentions, 1),
+        "portfolio_avg_score":   round(scores, 1),
+        "available":             True,
+    }
+
+
+def _portfolio_trends(trends_ctx: dict, weights: dict) -> dict | None:
+    """Weighted-average Google Trends z-score across portfolio tickers."""
+    if not trends_ctx:
+        return None
+    total_w = sum(abs(w) for t, w in weights.items() if trends_ctx.get(t, {}).get("available"))
+    if total_w == 0:
+        return None
+    zscore = sum(
+        trends_ctx[t]["zscore_7d"] * abs(w)
+        for t, w in weights.items()
+        if trends_ctx.get(t, {}).get("available")
+    ) / total_w
+    interest = sum(
+        trends_ctx[t]["interest_7d"] * abs(w)
+        for t, w in weights.items()
+        if trends_ctx.get(t, {}).get("available")
+    ) / total_w
+    return {
+        "portfolio_zscore_7d":    round(zscore, 2),
+        "portfolio_interest_7d":  round(interest, 1),
+        "available":              True,
+    }
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def run_all_forecasts(req) -> dict:
@@ -952,6 +1002,29 @@ def run_all_forecasts(req) -> dict:
         except Exception as exc:
             logger.debug("SECProvider skipped: %s", exc)
 
+    # ── Tier 2 data: news / reddit / trends (best-effort; non-fatal) ─────────────
+    news_ctx: dict    = {}
+    reddit_ctx: dict  = {}
+    trends_ctx: dict  = {}
+    if tickers:
+        try:
+            from .news_provider import get_news_context
+            news_ctx = get_news_context(tickers, weights, last_date)
+            logger.info("NewsProvider: %d total articles", news_ctx.get("portfolio_summary", {}).get("total_articles", 0))
+        except Exception as exc:
+            logger.debug("NewsProvider skipped: %s", exc)
+        try:
+            from .reddit_provider import get_reddit_context
+            reddit_ctx = get_reddit_context(tickers, last_date)
+            logger.info("RedditProvider: %d total mentions", reddit_ctx.get("portfolio_summary", {}).get("total_mentions", 0))
+        except Exception as exc:
+            logger.debug("RedditProvider skipped: %s", exc)
+        try:
+            from .trends_provider import get_trends_context
+            trends_ctx = get_trends_context(tickers, last_date)
+        except Exception as exc:
+            logger.debug("TrendsProvider skipped: %s", exc)
+
     results = []
     for method in req.methods:
         label = METHOD_LABELS.get(method, method)
@@ -965,12 +1038,15 @@ def run_all_forecasts(req) -> dict:
                     method=method, label=label, color=color,
                     forecast=None,
                     metadata={
-                        "client_side":    True,
-                        "xgb_features":   out,
-                        "model":          "HistGradientBoostingRegressor (sklearn)",
-                        "quantiles":      [0.05, 0.25, 0.50, 0.75, 0.95],
-                        "horizon_days":   21,
+                        "client_side":     True,
+                        "xgb_features":    out,
+                        "model":           "HistGradientBoostingRegressor (sklearn)",
+                        "quantiles":       [0.05, 0.25, 0.50, 0.75, 0.95],
+                        "horizon_days":    21,
                         "insider_context": insider,
+                        "reddit_context":  _portfolio_reddit(reddit_ctx, weights) or None,
+                        "trends_context":  _portfolio_trends(trends_ctx, weights) or None,
+                        "news_article_count": news_ctx.get("portfolio_summary", {}).get("total_articles"),
                     },
                 ))
                 continue
@@ -994,6 +1070,10 @@ def run_all_forecasts(req) -> dict:
                 raise ValueError("GARCH replaced by N-BEATS (Phase 2B). Use method='nbeats'.")
             elif method == "hmm":
                 out = forecast_hmm(returns, h, np_, last_date, macro_ctx or None)
+                if trends_ctx and "metadata" in out:
+                    out["metadata"]["trends_context"] = _portfolio_trends(trends_ctx, weights)
+                if news_ctx and "metadata" in out:
+                    out["metadata"]["news_article_count"] = news_ctx.get("portfolio_summary", {}).get("total_articles")
             elif method == "factor":
                 out = forecast_factor(returns, h, np_, last_date, req.ff5_decomposition,
                                       macro_ctx or None)
@@ -1018,6 +1098,8 @@ def run_all_forecasts(req) -> dict:
                         "lstm_features": out,
                         "architecture":  "Attention-LSTM(64) → Dense(32) → Dense(1)",
                         "attention":     "Bahdanau additive (CS230 2020)",
+                        "trends_context": _portfolio_trends(trends_ctx, weights) or None,
+                        "news_article_count": news_ctx.get("portfolio_summary", {}).get("total_articles"),
                     },
                 ))
                 continue
@@ -1029,9 +1111,17 @@ def run_all_forecasts(req) -> dict:
                 error=str(e),
             ))
 
+    tier2_summary = {
+        "reddit":  _portfolio_reddit(reddit_ctx, weights) if reddit_ctx else None,
+        "trends":  _portfolio_trends(trends_ctx, weights) if trends_ctx else None,
+        "news_available": bool(news_ctx.get("portfolio_summary", {}).get("available")),
+    }
+
     return ForecastResponse(
         forecast_start=forecast_dates[0] if forecast_dates else last_date,
         forecast_end=forecast_end,
         historical_end_value=hist_end_val,
         results=results,
+        news_context=news_ctx or None,
+        tier2_context=tier2_summary,
     )

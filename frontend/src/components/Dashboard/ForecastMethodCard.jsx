@@ -231,6 +231,14 @@ function getMetaItems(method, meta) {
         items.push({ label: '10Y-2Y', value: yieldCurve, warn: yieldRegime === 'inverted' })
       if (!mc.macro_available)
         items.push({ label: 'macro',  value: 'neutral', warn: true })
+      const reddit = meta.reddit_context
+      if (reddit?.available)
+        items.push({ label: 'WSB',    value: `${reddit.portfolio_mentions_7d?.toFixed(0)}×`, warn: false })
+      const trends = meta.trends_context
+      if (trends?.available)
+        items.push({ label: 'trends z', value: fmt(trends.portfolio_zscore_7d, 1), warn: Math.abs(trends.portfolio_zscore_7d) > 2 })
+      if (meta.news_article_count != null)
+        items.push({ label: 'articles', value: meta.news_article_count })
       const ins = meta.insider_context
       if (ins?.available) {
         const netBuy = ins.portfolio_net_buying_30d
@@ -269,6 +277,11 @@ function getMetaItems(method, meta) {
         items.push({ label: 'YC rgm',  value: meta.yield_curve_regime, warn: meta.yield_curve_regime === 'inverted' })
       if (meta.vix_regime)
         items.push({ label: 'VIX rgm', value: meta.vix_regime, warn: meta.vix_regime === 'elevated' })
+      const trends = meta.trends_context
+      if (trends?.available)
+        items.push({ label: 'trends z', value: fmt(trends.portfolio_zscore_7d, 1), warn: Math.abs(trends.portfolio_zscore_7d) > 2 })
+      if (meta.news_article_count != null)
+        items.push({ label: 'articles', value: meta.news_article_count })
       return items
     }
     case 'factor': {
@@ -321,12 +334,19 @@ function getMetaItems(method, meta) {
         items.push({ label: '10Y-2Y',    value: `${meta.yield_curve_10y2y?.toFixed(2)}%`, warn: meta.yield_curve_10y2y < 0 })
       return items
     }
-    case 'lstm':
-      return [
+    case 'lstm': {
+      const items = [
         { label: 'engine',    value: meta.client_side === false ? 'TF.js browser' : 'browser' },
         { label: 'passes',    value: meta.dropout_passes ?? 200 },
         { label: 'attention', value: meta.attention ? 'Bahdanau' : '—' },
       ]
+      const trends = meta.trends_context
+      if (trends?.available)
+        items.push({ label: 'trends z', value: fmt(trends.portfolio_zscore_7d, 1), warn: Math.abs(trends.portfolio_zscore_7d) > 2 })
+      if (meta.news_article_count != null)
+        items.push({ label: 'articles', value: meta.news_article_count })
+      return items
+    }
     default:
       return []
   }

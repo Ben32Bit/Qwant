@@ -16,8 +16,9 @@ const PHASE2_METHODS = ['hmm', 'var', 'lstm']   // lstm returns features, not fo
  * Both run client-side to stay within Railway 512MB free-tier RAM.
  */
 export function useForecast(backtest, portfolio) {
-  const [phase1, setPhase1]   = useState(null)
-  const [phase2, setPhase2]   = useState(null)
+  const [phase1, setPhase1]     = useState(null)
+  const [phase2, setPhase2]     = useState(null)
+  const [newsContext, setNewsContext] = useState(null)
   const [loading, setLoading] = useState({ phase1: false, xgb: false, nbeats: false, phase2: false, lstm: false })
   const [error, setError]     = useState(null)
   const [timing, setTiming]   = useState({ phase1Ms: null, xgbMs: null, nbeatsMs: null, phase2Ms: null, lstmMs: null })
@@ -31,6 +32,7 @@ export function useForecast(backtest, portfolio) {
     if (!backtest?.equity_curve) return
     setPhase1(null)
     setPhase2(null)
+    setNewsContext(null)
     setError(null)
     setTiming({ phase1Ms: null, xgbMs: null, nbeatsMs: null, phase2Ms: null, lstmMs: null })
 
@@ -57,6 +59,7 @@ export function useForecast(backtest, portfolio) {
       if (!res.ok) throw new Error(`Forecast phase 1 failed: ${res.status}`)
       p1Data = await res.json()
       setPhase1(p1Data)
+      if (p1Data?.news_context) setNewsContext(p1Data.news_context)
       setTiming(t => ({ ...t, phase1Ms: Date.now() - (p1Start.current ?? Date.now()) }))
     } catch (e) {
       setError(e.message)
@@ -230,6 +233,7 @@ export function useForecast(backtest, portfolio) {
     run,
     hasData:         allResults.length > 0,
     timing,
+    newsContext,
     p1StartRef:      p1Start,
     xgbStartRef:     xgbStart,
     nbeatsStartRef:  nbeatsStart,
