@@ -37,8 +37,12 @@ const _sessions = {}  // tag → InferenceSession (lazy, cached)
 
 async function getOrt() {
   if (!_ort) {
-    _ort = await import('onnxruntime-web')
-    // Use WASM backend; disable verbose logging
+    // onnxruntime-web is loaded from CDN via <script> in index.html (window.ort)
+    // This avoids Rollup/Vite trying to bundle WASM binaries at build time.
+    if (typeof window === 'undefined' || !window.ort) {
+      throw new Error('onnxruntime-web not loaded — check CDN script in index.html')
+    }
+    _ort = window.ort
     _ort.env.wasm.numThreads = 1
   }
   return _ort

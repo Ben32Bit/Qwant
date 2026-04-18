@@ -39,11 +39,11 @@ const _onnxCache = {}
 async function tryLoadOnnxModel(regime) {
   if (_onnxCache[regime] !== undefined) return _onnxCache[regime]
   try {
-    const { InferenceSession } = await import('onnxruntime-web')
+    if (typeof window === 'undefined' || !window.ort) { _onnxCache[regime] = null; return null }
     const url = `/models/meta/${regime}.onnx`
     const resp = await fetch(url, { method: 'HEAD' })
     if (!resp.ok) { _onnxCache[regime] = null; return null }
-    const session = await InferenceSession.create(url)
+    const session = await window.ort.InferenceSession.create(url)
     _onnxCache[regime] = session
     return session
   } catch {
