@@ -1,0 +1,334 @@
+{
+  "lookback": 30,
+  "horizon": 21,
+  "quantiles": [
+    0.05,
+    0.25,
+    0.5,
+    0.75,
+    0.95
+  ],
+  "n_blocks": 3,
+  "n_params": 720021,
+  "mu_r": 0.00028225110145285726,
+  "sigma_r": 0.012415779509971142,
+  "oos_r2": 0.344,
+  "ic": 0.5869,
+  "coverages": {
+    "p05": 0.057,
+    "p25": 0.256,
+    "p50": 0.489,
+    "p75": 0.724,
+    "p95": 0.939
+  },
+  "train_period": "2010-01-01\u20132024-12-31",
+  "n_assets": 15,
+  "weights_manifest": [
+    {
+      "name": "blocks.0.fc.0.weight",
+      "shape": [
+        256,
+        30
+      ],
+      "offset": 0,
+      "size": 7680
+    },
+    {
+      "name": "blocks.0.fc.0.bias",
+      "shape": [
+        256
+      ],
+      "offset": 30720,
+      "size": 256
+    },
+    {
+      "name": "blocks.0.fc.2.weight",
+      "shape": [
+        256,
+        256
+      ],
+      "offset": 31744,
+      "size": 65536
+    },
+    {
+      "name": "blocks.0.fc.2.bias",
+      "shape": [
+        256
+      ],
+      "offset": 293888,
+      "size": 256
+    },
+    {
+      "name": "blocks.0.fc.4.weight",
+      "shape": [
+        256,
+        256
+      ],
+      "offset": 294912,
+      "size": 65536
+    },
+    {
+      "name": "blocks.0.fc.4.bias",
+      "shape": [
+        256
+      ],
+      "offset": 557056,
+      "size": 256
+    },
+    {
+      "name": "blocks.0.fc.6.weight",
+      "shape": [
+        256,
+        256
+      ],
+      "offset": 558080,
+      "size": 65536
+    },
+    {
+      "name": "blocks.0.fc.6.bias",
+      "shape": [
+        256
+      ],
+      "offset": 820224,
+      "size": 256
+    },
+    {
+      "name": "blocks.0.backcast_head.weight",
+      "shape": [
+        30,
+        256
+      ],
+      "offset": 821248,
+      "size": 7680
+    },
+    {
+      "name": "blocks.0.backcast_head.bias",
+      "shape": [
+        30
+      ],
+      "offset": 851968,
+      "size": 30
+    },
+    {
+      "name": "blocks.0.forecast_head.weight",
+      "shape": [
+        105,
+        256
+      ],
+      "offset": 852088,
+      "size": 26880
+    },
+    {
+      "name": "blocks.0.forecast_head.bias",
+      "shape": [
+        105
+      ],
+      "offset": 959608,
+      "size": 105
+    },
+    {
+      "name": "blocks.1.fc.0.weight",
+      "shape": [
+        256,
+        30
+      ],
+      "offset": 960028,
+      "size": 7680
+    },
+    {
+      "name": "blocks.1.fc.0.bias",
+      "shape": [
+        256
+      ],
+      "offset": 990748,
+      "size": 256
+    },
+    {
+      "name": "blocks.1.fc.2.weight",
+      "shape": [
+        256,
+        256
+      ],
+      "offset": 991772,
+      "size": 65536
+    },
+    {
+      "name": "blocks.1.fc.2.bias",
+      "shape": [
+        256
+      ],
+      "offset": 1253916,
+      "size": 256
+    },
+    {
+      "name": "blocks.1.fc.4.weight",
+      "shape": [
+        256,
+        256
+      ],
+      "offset": 1254940,
+      "size": 65536
+    },
+    {
+      "name": "blocks.1.fc.4.bias",
+      "shape": [
+        256
+      ],
+      "offset": 1517084,
+      "size": 256
+    },
+    {
+      "name": "blocks.1.fc.6.weight",
+      "shape": [
+        256,
+        256
+      ],
+      "offset": 1518108,
+      "size": 65536
+    },
+    {
+      "name": "blocks.1.fc.6.bias",
+      "shape": [
+        256
+      ],
+      "offset": 1780252,
+      "size": 256
+    },
+    {
+      "name": "blocks.1.backcast_head.weight",
+      "shape": [
+        30,
+        256
+      ],
+      "offset": 1781276,
+      "size": 7680
+    },
+    {
+      "name": "blocks.1.backcast_head.bias",
+      "shape": [
+        30
+      ],
+      "offset": 1811996,
+      "size": 30
+    },
+    {
+      "name": "blocks.1.forecast_head.weight",
+      "shape": [
+        105,
+        256
+      ],
+      "offset": 1812116,
+      "size": 26880
+    },
+    {
+      "name": "blocks.1.forecast_head.bias",
+      "shape": [
+        105
+      ],
+      "offset": 1919636,
+      "size": 105
+    },
+    {
+      "name": "blocks.2.fc.0.weight",
+      "shape": [
+        256,
+        30
+      ],
+      "offset": 1920056,
+      "size": 7680
+    },
+    {
+      "name": "blocks.2.fc.0.bias",
+      "shape": [
+        256
+      ],
+      "offset": 1950776,
+      "size": 256
+    },
+    {
+      "name": "blocks.2.fc.2.weight",
+      "shape": [
+        256,
+        256
+      ],
+      "offset": 1951800,
+      "size": 65536
+    },
+    {
+      "name": "blocks.2.fc.2.bias",
+      "shape": [
+        256
+      ],
+      "offset": 2213944,
+      "size": 256
+    },
+    {
+      "name": "blocks.2.fc.4.weight",
+      "shape": [
+        256,
+        256
+      ],
+      "offset": 2214968,
+      "size": 65536
+    },
+    {
+      "name": "blocks.2.fc.4.bias",
+      "shape": [
+        256
+      ],
+      "offset": 2477112,
+      "size": 256
+    },
+    {
+      "name": "blocks.2.fc.6.weight",
+      "shape": [
+        256,
+        256
+      ],
+      "offset": 2478136,
+      "size": 65536
+    },
+    {
+      "name": "blocks.2.fc.6.bias",
+      "shape": [
+        256
+      ],
+      "offset": 2740280,
+      "size": 256
+    },
+    {
+      "name": "blocks.2.backcast_head.weight",
+      "shape": [
+        30,
+        256
+      ],
+      "offset": 2741304,
+      "size": 7680
+    },
+    {
+      "name": "blocks.2.backcast_head.bias",
+      "shape": [
+        30
+      ],
+      "offset": 2772024,
+      "size": 30
+    },
+    {
+      "name": "blocks.2.forecast_head.weight",
+      "shape": [
+        105,
+        256
+      ],
+      "offset": 2772144,
+      "size": 26880
+    },
+    {
+      "name": "blocks.2.forecast_head.bias",
+      "shape": [
+        105
+      ],
+      "offset": 2879664,
+      "size": 105
+    }
+  ]
+}
