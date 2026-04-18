@@ -7,6 +7,7 @@ import EnsembleCard from './EnsembleCard.jsx'
 import { computeEnsemble } from '../../ml/MetaEnsemble.js'
 import KellyPanel from './KellyPanel.jsx'
 import ScenarioPanel from './ScenarioPanel.jsx'
+import ForecastArchitecture from './ForecastArchitecture.jsx'
 
 const METHOD_ORDER = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
 
@@ -182,6 +183,9 @@ export default function ForecastPanel({ backtest, portfolio }) {
           </button>
         </div>
 
+        {/* Architecture dropdown */}
+        <ForecastArchitecture />
+
         {/* ETA progress bar */}
         {isRunning && (
           <EtaBar
@@ -225,6 +229,7 @@ export default function ForecastPanel({ backtest, portfolio }) {
             equityCurve={backtest?.equity_curve}
             forecastStart={meta?.forecast_start}
             loading={loading.phase1}
+            ensemble={ensemble}
           />
         )}
 

@@ -5,7 +5,9 @@ import {
 } from 'recharts'
 import { AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE } from '../../utils/chartConfig.js'
 
-const METHOD_ORDER = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
+const METHOD_ORDER  = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
+const METHOD_LABELS = { xgboost: 'XGBoost', nbeats: 'N-BEATS', factor: 'Factor', hmm: 'HMM', var: 'GP', lstm: 'LSTM' }
+const METHOD_COLORS = { xgboost: '#4a9eff', nbeats: '#ffd43b', factor: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757' }
 
 function fmtVal(v) {
   if (v == null) return '—'
@@ -33,6 +35,78 @@ function CompositeTooltip({ active, payload, label }) {
   )
 }
 
+// ── Method status dots ────────────────────────────────────────────────────────
+
+function MethodStatusDots({ results }) {
+  const resultMap = {}
+  for (const r of (results ?? [])) resultMap[r.method] = r
+
+  return (
+    <div className="flex gap-2 flex-wrap">
+      {METHOD_ORDER.map(method => {
+        const r     = resultMap[method]
+        const color = METHOD_COLORS[method]
+        const done  = r?.forecast != null
+        const err   = r?.error
+        const wait  = !r || (!done && !err)
+
+        return (
+          <div key={method} className="flex items-center gap-1">
+            <span style={{
+              display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+              background: err ? '#ff4757' : done ? color : 'var(--border)',
+              boxShadow:  done ? `0 0 4px ${color}88` : 'none',
+              flexShrink: 0,
+            }} />
+            <span className="mono" style={{
+              fontSize: 9,
+              color: done ? color : err ? '#ff4757' : 'var(--text-secondary)',
+              opacity: wait ? 0.5 : 1,
+            }}>
+              {METHOD_LABELS[method]}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Ensemble weight strip ─────────────────────────────────────────────────────
+
+function EnsembleWeights({ ensemble }) {
+  if (!ensemble?.weights) return null
+  const methods = Object.entries(ensemble.weights)
+    .sort((a, b) => b[1] - a[1])
+    .filter(([, w]) => w > 0.01)
+
+  return (
+    <div className="flex items-center gap-2 mt-2">
+      <span className="mono flex-shrink-0" style={{ fontSize: 9, color: 'var(--text-secondary)' }}>Ensemble:</span>
+      <div className="flex flex-1 rounded overflow-hidden" style={{ height: 8 }}>
+        {methods.map(([method, weight]) => (
+          <div
+            key={method}
+            title={`${METHOD_LABELS[method] ?? method}: ${(weight * 100).toFixed(0)}%`}
+            style={{
+              width: `${weight * 100}%`,
+              background: METHOD_COLORS[method] ?? '#888',
+              transition: 'width 0.5s ease',
+            }}
+          />
+        ))}
+      </div>
+      <div className="flex gap-2 flex-shrink-0">
+        {methods.slice(0, 3).map(([method, weight]) => (
+          <span key={method} className="mono" style={{ fontSize: 9, color: METHOD_COLORS[method] ?? '#888' }}>
+            {METHOD_LABELS[method] ?? method} {(weight * 100).toFixed(0)}%
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /**
  * Full-width composite chart: historical portfolio value curve on the left,
  * all method median (p50) forecast lines continuing from the last historical
@@ -44,7 +118,7 @@ function CompositeTooltip({ active, payload, label }) {
  * Forecast values are computed as:
  *   projected_value = last_historical_value × (1 + p50_pct_return / 100)
  */
-export default function ForecastComposite({ results, equityCurve, forecastStart, loading }) {
+export default function ForecastComposite({ results, equityCurve, forecastStart, loading, ensemble }) {
   const chartData = useMemo(() => {
     if (!equityCurve?.length) return []
 
@@ -93,24 +167,25 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
 
   return (
     <div className="rounded-lg border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
-      <div className="flex items-center justify-between mb-3">
-        <div>
+      <div className="mb-3">
+        <div className="flex items-center justify-between">
           <h3 className="mono font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
             Composite Forecast
             <span className="ml-2 font-normal text-xs" style={{ color: 'var(--text-secondary)' }}>
               · projected portfolio value · next 12 months
             </span>
           </h3>
-          <p className="mono text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-            Tight clustering = higher conviction · wide spread = model disagreement
-          </p>
+          {activeResults.length === 6 && (
+            <span className="mono text-xs px-2 py-0.5 rounded"
+              style={{ background: 'rgba(0,212,170,0.1)', border: '1px solid rgba(0,212,170,0.3)', color: 'var(--accent-green)' }}>
+              all 6 ready
+            </span>
+          )}
         </div>
-        {activeResults.length < 6 && (
-          <span className="mono text-xs px-2 py-0.5 rounded"
-            style={{ background: 'rgba(255,211,59,0.1)', border: '1px solid rgba(255,211,59,0.3)', color: 'var(--accent-yellow)' }}>
-            {activeResults.length}/6 ready
-          </span>
-        )}
+        <div className="mt-2">
+          <MethodStatusDots results={results} />
+        </div>
+        <EnsembleWeights ensemble={ensemble} />
       </div>
 
       <ResponsiveContainer width="100%" height={240}>
