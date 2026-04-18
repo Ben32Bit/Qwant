@@ -1,0 +1,28 @@
+{
+  "feature_names": [
+    "ret_1d",
+    "ret_5d",
+    "ret_21d",
+    "ret_63d",
+    "vol_21d",
+    "vol_63d",
+    "mom_12_1",
+    "rsi_14",
+    "vol_ratio"
+  ],
+  "n_features": 9,
+  "horizon_days": 21,
+  "oos_r2": -0.0587,
+  "oos_mse": 0.00317,
+  "ic": 0.0367,
+  "n_samples": 55320,
+  "n_assets": 15,
+  "train_period": "2010-01-01\u20132024-12-31",
+  "quantiles": [
+    0.05,
+    0.25,
+    0.5,
+    0.75,
+    0.95
+  ]
+}
