@@ -1,12 +1,18 @@
 import React, { useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 
-const PAPER_CITATION = 'Fama, E.F. & French, K.R. (2015). A five-factor asset pricing model. Journal of Financial Economics, 116(1), 1–22. https://doi.org/10.1016/j.jfineco.2014.10.010'
+const PAPER_CITATIONS = [
+  'Fama, E.F. & French, K.R. (2015). A five-factor asset pricing model. Journal of Financial Economics, 116(1), 1–22. https://doi.org/10.1016/j.jfineco.2014.10.010',
+  'Carhart, M.M. (1997). On persistence in mutual fund performance. Journal of Finance, 52(1), 57–82. https://doi.org/10.1111/j.1540-6261.1997.tb03808.x',
+  'Novy-Marx, R. (2013). The other side of value: The gross profitability premium. Journal of Financial Economics, 108(1), 1–28. https://doi.org/10.1016/j.jfineco.2013.01.003',
+]
+// Keep a single string for legacy callers
+const PAPER_CITATION = PAPER_CITATIONS[0]
 
 const FACTOR_META = {
   alpha: {
     label: 'Alpha (α)',
-    description: 'Annualised excess return unexplained by the five factors — Jensen\'s alpha. A positive, significant alpha suggests genuine outperformance beyond compensated risk.',
+    description: 'Annualised excess return unexplained by the factors — Jensen\'s alpha. A positive, significant alpha suggests genuine outperformance beyond compensated risk.',
     sign: 'pct',
   },
   mkt_rf: {
@@ -25,13 +31,18 @@ const FACTOR_META = {
     sign: 'ratio',
   },
   rmw: {
-    label: 'Profitability (RMW)',
-    description: 'Robust Minus Weak operating profitability. Positive loading means the portfolio skews toward more profitable firms.',
+    label: 'Quality / Profitability (RMW)',
+    description: 'Robust Minus Weak operating profitability — the quality factor (Novy-Marx 2013). Positive loading means the portfolio skews toward high-quality, profitable firms.',
     sign: 'ratio',
   },
   cma: {
     label: 'Investment (CMA)',
-    description: 'Conservative Minus Aggressive investment — exposure to the investment premium. Positive loading indicates conservative (low-investment) firms; negative indicates aggressive.',
+    description: 'Conservative Minus Aggressive investment. Positive loading indicates conservative (low-investment) firms; negative indicates aggressive.',
+    sign: 'ratio',
+  },
+  mom: {
+    label: 'Momentum (UMD)',
+    description: 'Up Minus Down — 12-minus-1 month price momentum (Carhart 1997). Positive loading means the portfolio tilts toward past winners; negative toward past losers.',
     sign: 'ratio',
   },
 }
@@ -211,7 +222,9 @@ export default function FamaFrenchFactors({ ff5, loading }) {
             </tr>
           </thead>
           <tbody>
-            {['alpha', 'mkt_rf', 'smb', 'hml', 'rmw', 'cma'].map(k => (
+            {['alpha', 'mkt_rf', 'smb', 'hml', 'rmw', 'cma',
+               ...(ff5?.mom != null ? ['mom'] : [])
+              ].map(k => (
               <FactorRow key={k} factorKey={k} data={ff5} />
             ))}
           </tbody>

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid,
@@ -9,13 +9,14 @@ import { AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE } from '../../utils/chartConfig.j
 // ── Paper citations — matched to FamaFrenchFactors.jsx format ─────────────────
 
 const CITATIONS = {
-  monte_carlo: [
-    'Black, F. & Scholes, M. (1973). The pricing of options and corporate liabilities. Journal of Political Economy, 81(3), 637–654. https://doi.org/10.1086/260062',
-    'Merton, R.C. (1969). Lifetime portfolio selection under uncertainty: the continuous-time case. Review of Economics and Statistics, 51(3), 247–257. https://doi.org/10.2307/1926560',
+  xgboost: [
+    'Chen, T. & Guestrin, C. (2016). XGBoost: A Scalable Tree Boosting System. KDD \'16, 785–794. https://doi.org/10.1145/2939672.2939785',
+    'Gu, S., Kelly, B., & Xiu, D. (2020). Empirical Asset Pricing via Machine Learning. Review of Financial Studies, 33(5), 2223–2273. https://doi.org/10.1093/rfs/hhaa009',
+    'Friedman, J.H. (2001). Greedy function approximation: a gradient boosting machine. Annals of Statistics, 29(5), 1189–1232. https://doi.org/10.1214/aos/1013203451',
   ],
-  garch: [
-    'Engle, R.F. (1982). Autoregressive conditional heteroscedasticity with estimates of the variance of United Kingdom inflation. Econometrica, 50(4), 987–1007. https://doi.org/10.2307/1912773',
-    'Bollerslev, T. (1986). Generalized autoregressive conditional heteroscedasticity. Journal of Econometrics, 31(3), 307–327. https://doi.org/10.1016/0304-4076(86)90063-1',
+  nbeats: [
+    'Oreshkin, B., Carpov, D., Chapados, N., & Bengio, Y. (2020). N-BEATS: Neural Basis Expansion Analysis for Interpretable Time Series Forecasting. ICLR 2020. https://arxiv.org/abs/1905.10437',
+    'Koenker, R. & Bassett, G. (1978). Regression Quantiles. Econometrica, 46(1), 33–50. https://doi.org/10.2307/1913643',
   ],
   hmm: [
     'Hamilton, J.D. (1989). A new approach to the economic analysis of nonstationary time series and the business cycle. Econometrica, 57(2), 357–384. https://doi.org/10.2307/1912559',
@@ -23,11 +24,14 @@ const CITATIONS = {
   ],
   factor: [
     'Fama, E.F. & French, K.R. (2015). A five-factor asset pricing model. Journal of Financial Economics, 116(1), 1–22. https://doi.org/10.1016/j.jfineco.2014.10.010',
+    'Carhart, M.M. (1997). On persistence in mutual fund performance. Journal of Finance, 52(1), 57–82. https://doi.org/10.1111/j.1540-6261.1997.tb03808.x',
+    'Novy-Marx, R. (2013). The other side of value: The gross profitability premium. Journal of Financial Economics, 108(1), 1–28. https://doi.org/10.1016/j.jfineco.2013.01.003',
     'Cochrane, J.H. (2011). Presidential address: Discount rates. Journal of Finance, 66(4), 1047–1108. https://doi.org/10.1111/j.1540-6261.2011.01671.x',
   ],
   var: [
-    'Sims, C.A. (1980). Macroeconomics and reality. Econometrica, 48(1), 1–48. https://doi.org/10.2307/1912017',
-    'Campbell, J.Y., Chan, Y.L., & Viceira, L.M. (2003). A multivariate model of strategic asset allocation. Journal of Financial Economics, 67(1), 41–80. https://doi.org/10.1016/S0304-405X(02)00231-3',
+    'Rasmussen, C.E. & Williams, C.K.I. (2006). Gaussian Processes for Machine Learning. MIT Press. https://gaussianprocess.org/gpml/',
+    'Roberts, S. et al. (2013). Gaussian Processes for time-series modelling. Phil. Trans. R. Soc. A, 371(1984). https://doi.org/10.1098/rsta.2011.0550',
+    'Matérn, B. (1960). Spatial Variation. Meddelanden från Statens Skogsforskningsinstitut, 49(5). [ν=5/2 kernel]',
   ],
   lstm: [
     'CS230 Stanford (2020). Predicting Stock Market Returns Using Temporal Attention-Enhanced LSTM. Winter 2020 Project Reports. https://cs230.stanford.edu/projects_winter_2020/reports/32066186.pdf',
@@ -41,20 +45,20 @@ const CITATIONS = {
 const OOS_CITATION = 'Lopez de Prado, M. (2018). Advances in Financial Machine Learning, Ch. 7 (Purged Walk-Forward CV). https://doi.org/10.1002/9781119482161'
 
 const COMPLEXITY = {
-  monte_carlo: { label: 'LOW',  color: 'var(--accent-green)' },
-  garch:       { label: 'MED',  color: 'var(--accent-yellow)' },
+  xgboost:     { label: 'MED',  color: 'var(--accent-yellow)' },
+  nbeats:      { label: 'HIGH', color: 'var(--accent-red)' },
   hmm:         { label: 'MED',  color: 'var(--accent-yellow)' },
   factor:      { label: 'LOW',  color: 'var(--accent-green)' },
-  var:         { label: 'MED',  color: 'var(--accent-yellow)' },
+  var:         { label: 'HIGH', color: 'var(--accent-red)' },
   lstm:        { label: 'HIGH', color: 'var(--accent-red)' },
 }
 
 const METHOD_DESC = {
-  monte_carlo: 'Geometric Brownian Motion — constant drift μ and volatility σ estimated from history. Simplest parametric model; GBM is the foundation of options pricing.',
-  garch:       'GARCH(1,1) captures volatility clustering — periods of high volatility beget more high volatility. Parameters fit by MLE on 80% train window; residuals validated on 20% held-out set.',
+  xgboost:     'Histogram gradient boosting quantile regressors (sklearn HistGBR) — 5 models trained per quantile (p5/p25/p50/p75/p95) on 14 features: 9 market microstructure signals (momentum, realized vol, vol regime, RSI) + 5 live macro signals (10Y-2Y yield curve, BAA credit spread, TIPS real yield, VIX percentile rank, VIX term slope). Purged walk-forward CV with 21-day embargo + early stopping (López de Prado 2018). Runs in browser via ONNX Runtime Web; fan width scales by √(t/21) for the 252-day horizon. Rank IC ≥ 0.03 is considered useful in financial ML practice (Gu, Kelly & Xiu 2020).',
+  nbeats:      'N-BEATS (Neural Basis Expansion Analysis): 3 residual stacks of fully-connected blocks. Each block explains part of the input (backcast) and contributes a partial multi-horizon forecast. Replaces GARCH which only forecasts conditional variance. N-BEATS directly predicts 21-day return sequences at 5 quantiles (pinball loss) and runs 12 recursive 21-day periods for the 252-day chart. Runs in browser via pure-JS matrix math (no runtime dependency).',
   hmm:         '2-state Hidden Markov Model (Bull / Bear). Transition probabilities and regime-conditional return distributions estimated via Baum-Welch EM with 10 random initialisations to escape local optima.',
-  factor:      'Factor-anchored GBM: expected return derived from Fama-French 5-factor loadings × consensus long-run premia (Damodaran 2024), replacing naive historical mean. Reduces look-ahead bias from short backtests.',
-  var:         'Vector Autoregression captures lead-lag cross-asset relationships. Lag order selected by AIC; out-of-sample residual covariance used for simulation to avoid covariance inflation.',
+  factor:      'Factor-anchored GBM: expected return derived from FF5 + Momentum (UMD, Carhart 1997) loadings × consensus long-run premia (Damodaran 2024), replacing naive historical mean. RMW serves as the quality/profitability factor (Novy-Marx 2013). Momentum beta is automatically included when Ken French daily data is available. Idiosyncratic vol (σ_ε = total vol × √(1−R²)) is used as the noise term — avoids double-counting systematic risk. Reduces look-ahead bias from short backtests.',
+  var:         'Gaussian Process autoregression (Phase 2D): replaces VAR with a Bayesian nonparametric model. ARD Matérn 5/2 kernel learns which of the last 7 daily returns are most predictive (one length scale per lag). WhiteKernel absorbs observation noise. GP posterior gives exact Bayesian uncertainty — no Monte Carlo needed. Fan chart uses Gaussian approximation: cumulative return at T ~ N(Σμₜ, Σσₜ²). No stationarity requirement; complexity tuned by marginal likelihood. OOS NLPD measures calibration quality.',
   lstm:        'Attention-LSTM: single LSTM(64) encoder → Bahdanau temporal attention → Dense(32) → Dense(1). Attention lets the model selectively weight past hidden states, focusing on regime-relevant windows. MC Dropout (200 passes) produces Bayesian uncertainty bands. Chronological 70/15/15 split; early stopping on val loss.',
 }
 
@@ -205,18 +209,35 @@ function fmtPct(v) { return v != null ? `${(v * 100).toFixed(1)}%` : '—' }
 function getMetaItems(method, meta) {
   if (!meta) return []
   switch (method) {
-    case 'monte_carlo':
-      return [
-        { label: 'μ (ann)', value: fmtPct(meta.mu_ann) },
-        { label: 'σ (ann)', value: fmtPct(meta.sigma_ann) },
-        { label: 'n obs',   value: meta.n_obs },
+    case 'xgboost': {
+      const mc = meta.macro_context ?? {}
+      const yieldCurve = mc.yield_curve_10y2y != null ? `${mc.yield_curve_10y2y.toFixed(2)}%` : '—'
+      const yieldRegime = mc.yield_curve_10y2y != null
+        ? (mc.yield_curve_10y2y < 0 ? 'inverted' : mc.yield_curve_10y2y < 0.5 ? 'flat' : 'normal')
+        : null
+      // rank_ic (Spearman) is more meaningful than OOS R² for financial return prediction
+      const icVal = meta.rank_ic != null ? fmt(meta.rank_ic, 3) : (meta.oos_r2 != null ? fmt(meta.oos_r2, 3) : '—')
+      const icLabel = meta.rank_ic != null ? 'rank IC' : 'OOS R²'
+      const items = [
+        { label: icLabel,    value: icVal },
+        { label: 'vol rgm',  value: meta.vol_regime ?? '—', warn: meta.vol_regime === 'high' },
+        { label: 'RSI-14',   value: meta.rsi_14 != null ? fmt(meta.rsi_14, 2) : '—' },
+        { label: 'n obs',    value: meta.n_obs },
       ]
-    case 'garch':
+      if (mc.vix_spot != null)
+        items.push({ label: 'VIX',    value: mc.vix_spot.toFixed(1), warn: mc.vix_pct_rank > 0.75 })
+      if (mc.yield_curve_10y2y != null)
+        items.push({ label: '10Y-2Y', value: yieldCurve, warn: yieldRegime === 'inverted' })
+      if (!mc.macro_available)
+        items.push({ label: 'macro',  value: 'neutral', warn: true })
+      return items
+    }
+    case 'nbeats':
       return [
-        { label: 'α+β',       value: fmt(meta.persistence, 3), warn: meta.persistence > 0.98 },
-        { label: 'cur vol',   value: fmtPct(meta.current_vol_ann) },
-        { label: 'LR vol',    value: fmtPct(meta.longrun_vol_ann) },
-        { label: 'LB ok',     value: meta.oos_ljungbox_ok ? '✓' : '✗', warn: !meta.oos_ljungbox_ok },
+        { label: 'periods',   value: meta.periods ?? 12 },
+        { label: 'vol 21d',   value: fmtPct(meta.vol_21d_ann) },
+        { label: 'ret 21d',   value: meta.ret_21d != null ? `${(meta.ret_21d * 100).toFixed(1)}%` : '—' },
+        { label: 'n obs',     value: meta.n_obs },
       ]
     case 'hmm':
       return [
@@ -225,19 +246,28 @@ function getMetaItems(method, meta) {
         { label: 'bull μ',    value: fmtPct(meta.bull_state_mu_ann) },
         { label: 'bear μ',    value: fmtPct(meta.bear_state_mu_ann) },
       ]
-    case 'factor':
-      return [
+    case 'factor': {
+      const factorLabel = meta.source === 'historical_fallback' ? 'hist'
+        : meta.source === 'ff6' ? 'FF5+Mom'
+        : 'FF5'
+      const items = [
         { label: 'μ factor', value: fmtPct(meta.mu_factor_ann) },
         { label: 'μ hist',   value: fmtPct(meta.mu_hist_ann) },
         { label: 'R²',       value: fmt(meta.r_squared, 2) },
-        { label: 'source',   value: meta.source === 'historical_fallback' ? 'fallback' : 'FF5', warn: meta.source === 'historical_fallback' },
+        { label: 'model',    value: factorLabel, warn: meta.source === 'historical_fallback' },
       ]
+      if (meta.mom_beta != null)
+        items.push({ label: 'Mom β', value: fmt(meta.mom_beta, 2) })
+      if (meta.rmw_beta != null)
+        items.push({ label: 'Quality β', value: fmt(meta.rmw_beta, 2) })
+      return items
+    }
     case 'var':
       return [
-        { label: 'lag p',    value: meta.lag_order },
-        { label: 'assets',   value: meta.n_assets },
-        { label: 'Granger',  value: meta.granger_significant ? 'sig' : 'n.s.', warn: !meta.granger_significant },
         { label: 'OOS R²',   value: meta.oos_r2 != null ? fmt(meta.oos_r2, 3) : '—' },
+        { label: 'NLPD',     value: meta.nlpd    != null ? fmt(meta.nlpd, 3)   : '—' },
+        { label: 'lookback', value: `${meta.lookback ?? 7}d` },
+        { label: 'kernel',   value: 'Matérn ν=5/2' },
       ]
     case 'lstm':
       return [
@@ -273,13 +303,18 @@ export default function ForecastMethodCard({ result, loading, browserCompute, la
         {browserCompute ? (
           <>
             <div className="flex items-center gap-2 mb-3">
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: color ?? '#ff4757', display: 'inline-block' }} />
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: color ?? '#4a9eff', display: 'inline-block' }} />
               <span className="mono text-xs font-bold" style={{ color: 'var(--text-primary)' }}>{label}</span>
             </div>
             <div className="flex-1 flex flex-col items-center justify-center text-center">
-              <div className="mono text-xs mb-1" style={{ color: '#ff4757' }}>⟳ Computing in browser</div>
+              <div className="mono text-xs mb-1" style={{ color: color ?? 'var(--accent-blue)' }}>⟳ Computing in browser</div>
               <div className="mono text-xs" style={{ color: 'var(--text-secondary)' }}>
-                200 MC Dropout passes · TensorFlow.js
+                {method === 'xgboost'
+                  ? '5 quantile models · ONNX Runtime Web'
+                  : method === 'nbeats'
+                  ? '12-period recursive · pure-JS weights'
+                  : '200 MC Dropout passes · TensorFlow.js'
+                }
               </div>
             </div>
           </>

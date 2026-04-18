@@ -2,6 +2,118 @@
 
 ---
 
+## 2026-04-18 — Phase 3: Tier 1 Data Provider Layer (FRED + VIX → XGBoost 14 features)
+
+**What:** Added live macro/VIX data providers and expanded XGBoost from 9 to 14 features.
+
+**New files:**
+- `backend/app/services/fred_provider.py` — Fetches T10Y2Y, BAA10Y, DFII10, DFF from FRED via pandas_datareader. Returns scalar values + rolling percentile ranks. 24h in-process cache. Falls back to long-run neutral averages on network failure.
+- `backend/app/services/vix_provider.py` — Fetches ^VIX + ^VIX3M from yfinance. Returns vix_spot, vix_pct_rank, vix_term_slope, vix_contango. Same caching/fallback pattern.
+
+**Updated files:**
+- `backend/scripts/train_xgboost.py` — 9→14 features; `download_macro_data()` joins FRED+VIX history; `compute_features()` accepts optional `macro_vals: np.ndarray`; `build_dataset()` accepts optional `macro_df`; meta.json now includes `feature_means`, `macro_features`, `n_macro_features` for inference-time fallback.
+- `backend/app/services/forecast_engine.py` — `prepare_xgboost_features()` now calls `get_macro_features()` + `get_vix_features()`; appends 5 macro values to features list; populates `macro_context` dict for the UI card.
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — XGBoost meta strip now shows VIX level (warned if pct_rank > 0.75), 10Y-2Y yield curve (warned if inverted), and "macro: neutral" warn badge if FRED/VIX were unavailable.
+
+**Macro features added (5):**
+  yield_curve_10y2y, credit_spread_baa, vix_pct_rank, vix_term_slope, real_yield_10y
+
+**Action required:** User must retrain XGBoost locally:
+  `cd backend && python scripts/train_xgboost.py`
+  Then commit new ONNX files + meta.json.
+
+**Pending:** Phase 3D (SEC/EDGAR insider data), Phase 3E (route macro to HMM + GP + Factor), Phase 4 (Tier 2), Phase 5 (regime-conditional meta-learner).
+
+---
+
+## 2026-04-18 — Phase 2D: Replace VAR → Gaussian Process Autoregression
+
+**What:** Replaced VAR (Vector Autoregression) with a Gaussian Process autoregression (GPAR). VAR required fetching individual asset prices, imposed stationarity + normality assumptions, and used Monte Carlo simulation. GP replaces all of this with exact Bayesian inference on the portfolio return series directly.
+
+**Architecture:** ARD Matérn ν=5/2 kernel (7 lag-specific length scales) + WhiteKernel for noise floor. Rolling 7-day return window as input features. Up to 300 training points (O(n³) tractability cap). Fan chart from Gaussian approximation: cumulative return at T ~ N(Σμₜ, Σσₜ²) — no Monte Carlo needed.
+
+**OOS diagnostics:** Chronological 80/20 split. Predictive R² (skill) + NLPD (negative log predictive density, calibration quality — lower is better).
+
+**Files modified:**
+- `backend/app/services/forecast_engine.py` — removed `forecast_var()` and VAR asset-price fetch block; added `forecast_gp(returns, horizon, last_date)`; METHOD_LABELS["var"] → "Gaussian Process (GP)"
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — GP citations (Rasmussen & Williams 2006, Roberts et al. 2013, Matérn 1960); COMPLEXITY HIGH; meta strip shows OOS R², NLPD, lookback, kernel
+- `frontend/src/components/Dashboard/ForecastPanel.jsx` — LoadingCard label updated; ETA reduced to 15s; removed unused `React`, `BROWSER_METHODS`, `timing` vars
+
+**Status:** COMPLETE. No training required — GP fits at inference time.
+
+---
+
+## 2026-04-18 — Phase 2C: Extend Factor Model → FF5 + Momentum + Quality
+
+**What:** Extended the Factor Model forecast from FF5 to FF5 + Momentum (UMD, Carhart 1997). Quality is already captured by RMW (Novy-Marx 2013 establishes gross profitability = quality). The upgrade adds Momentum beta to the expected-return formula: `μ = RF + Σ(βᵢ × premia) + α`, where Momentum premium = 3.8% annualized.
+
+**Where:** Momentum factor is fetched from Ken French's daily data library (`F-F_Momentum_Factor_daily` via pandas-datareader), which runs during the backtest's FF5 decomposition step. Falls back gracefully to 5-factor if data unavailable.
+
+**Mechanics:** `factor_decomposition.py` now runs a 6-factor OLS regression (FF5 + UMD) when Ken French data is available. The result dict includes `mom`, `mom_t_stat`, `mom_stars`, and `factors_used`. `forecast_factor()` iterates over all keys in `FACTOR_PREMIA` instead of hardcoding 5 factors — making future factor additions a one-liner.
+
+**Files modified:**
+- `backend/app/services/factor_decomposition.py` — `_via_ken_french()` fetches `F-F_Momentum_Factor_daily`; `_build_result()` refactored to accept dynamic `factor_keys` list
+- `backend/app/services/forecast_engine.py` — `FACTOR_PREMIA` gets `"mom": 0.038`; `forecast_factor()` now sums all premia generically; metadata includes `n_factors`, `mom_beta`, `rmw_beta`; `METHOD_LABELS["factor"]` → "Factor Model (FF5+Mom)"
+- `frontend/src/components/Dashboard/FamaFrenchFactors.jsx` — conditionally renders Momentum (UMD) row when `ff5.mom != null`; RMW relabeled "Quality / Profitability (RMW)"
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — updated citations (Carhart 1997, Novy-Marx 2013); factor meta strip shows "FF5+Mom"/"FF5" model label, Mom β, Quality β
+
+**Status:** COMPLETE. No training required — uses existing Ken French data download.
+
+---
+
+## 2026-04-18 — Phase 2B: Replace GARCH(1,1) → N-BEATS Neural (Pure-JS Client-Side)
+
+**What:** Replaced GARCH(1,1) with N-BEATS (Neural Basis Expansion Analysis, Oreshkin et al. 2020 ICLR). N-BEATS provides true multi-horizon return forecasts at 5 quantiles via stacked residual MLP blocks. Runs in browser via pure-JS matrix math — no ONNX or TF.js runtime needed (PyTorch 2.4+ ONNX export is broken due to pybind11 signature inspection failure; raw float32 binary export is cleaner and has no dependency).
+
+**Architecture:** 3 residual N-BEATS blocks. Each block: FC(256)×4 → backcast head (30 outputs) + forecast head (21×5 outputs). Backcast subtracted from residual; forecasts summed. Trained with pinball loss (Koenker & Bassett 1978). OOS results: R²=0.345, IC=0.589, near-ideal coverage calibration.
+
+**Browser inference:** `NBeatsInferer.js` loads `weights.bin` (raw float32 binary, ~1-2 MB) + `meta.json` (normalisation params + weight manifest). Implements `linear(x,W,b)` + `relu` in ~50 lines; no runtime dependency. Runs 12 recursive 21-day periods for the 252-day fan chart.
+
+**Export format:** `train_nbeats.py:export_weights()` writes all `model.named_parameters()` as a flat float32 binary with a manifest list `[{name, shape, offset, size}]` stored in `meta.json["weights_manifest"]`.
+
+**Files created/finalised:**
+- `backend/scripts/train_nbeats.py` — PyTorch training + pure float32 binary export (no ONNX)
+- `frontend/src/ml/NBeatsInferer.js` — pure-JS forward pass loading weights.bin
+- `frontend/public/models/nbeats/weights.bin` + `meta.json` — committed model artifacts
+
+**Files modified:**
+- `backend/app/services/forecast_engine.py` — `prepare_nbeats_features()` returns last-30-day window
+- `frontend/src/hooks/useForecast.js` — XGBoost (ONNX) + N-BEATS (pure-JS) run in parallel via `Promise.all`
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — nbeats browser card: "12-period recursive · pure-JS weights"
+- `frontend/src/components/Dashboard/ForecastPanel.jsx` — ETA bar label updated
+
+**Status:** COMPLETE. Phase 2B shipped.
+
+---
+
+## 2026-04-18 — Phase 2A: Replace Monte Carlo GBM → XGBoost Quantile (Client-Side ONNX)
+
+**What:** Replaced Monte Carlo GBM with XGBoost gradient-boosted quantile regressors. GBM assumes a random walk with constant μ/σ — no learned signal. XGBoost learns nonlinear interactions between 9 market microstructure features (momentum at multiple horizons, realized vol, vol regime, RSI). Per Gu, Kelly & Xiu (2020, RFS), XGBoost dominates parametric models on OOS stock return prediction.
+
+**Architecture:** XGBoost runs CLIENT-SIDE via ONNX Runtime Web (same pattern as Attention-LSTM via TF.js). Server does feature engineering only; browser loads 5 ONNX models (one per quantile: p5/p25/p50/p75/p95). Fan chart extrapolated from 21-day predictions to 252 days via median compounding + √(t/21) spread scaling.
+
+**Training:** sklearn `GradientBoostingRegressor(loss='quantile')` Pipeline with StandardScaler → skl2onnx ONNX export. Pipeline includes scaler as preprocessing nodes so browser passes raw features. Purged walk-forward CV with 21-day embargo (López de Prado 2018). Expanding window, 252-day minimum train, 20% held-out test.
+
+**Files created:**
+- `backend/scripts/train_xgboost.py` — training script. Downloads 15-asset universe (2010-2024), builds 9-feature dataset (~90K+ samples), does walk-forward OOS eval, trains 5 quantile models on full 80% data, exports to ONNX.
+- `frontend/src/ml/XGBoostInferer.js` — ONNX Runtime Web inference. Loads 5 ONNX sessions lazily (cached). Extrapolates 21-day quantile predictions to 252-day fan chart.
+
+**Files modified:**
+- `backend/app/services/forecast_engine.py` — removed `forecast_monte_carlo()`, added `prepare_xgboost_features()` (returns 9 raw features + display metadata), updated METHOD_COLORS/METHOD_LABELS/dispatch
+- `frontend/src/hooks/useForecast.js` — Phase 1B client inference after Phase 1 server response. PHASE1_METHODS now `['xgboost', 'garch', 'factor']`. Loading state gains `xgb` field.
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — xgboost citations (Chen/Guestrin 2016, Gu/Kelly/Xiu 2020, Friedman 2001), complexity badge "MED", MetaStrip shows OOS R², vol regime, RSI-14, n_obs
+- `frontend/src/components/Dashboard/ForecastPanel.jsx` — xgboost in METHOD_ORDER/PHASE1_METHODS, XGB_EST_MS=3000, EtaBar handles 4 phases (p1/xgb/p2/lstm), browser loading card for xgboost
+- `frontend/package.json` — added `onnxruntime-web ^1.20.1`
+
+**Pending (user action required):**
+- Run `cd backend && pip install scikit-learn skl2onnx onnx yfinance && python scripts/train_xgboost.py`
+- Commit `frontend/public/models/xgboost/*.onnx` files
+- Deploy + test forecast tab
+
+**Phase 2A approval gate:** After training, verify OOS R² > 0 (any positive predictive signal beats GBM) and fan chart looks sensible on a test portfolio.
+
+---
+
 ## 2026-04-17 — Phase 1: Move Attention-LSTM to Browser (TF.js) — RAM reclamation
 
 **What:** Moved Attention-LSTM inference from the Railway server to the user's browser via TensorFlow.js. This eliminates `tensorflow-cpu` (~450MB) from the server, dropping steady-state RAM from ~680MB (over free-tier limit) to ~230MB (well within 512MB).

@@ -1,17 +1,28 @@
 """
-Fama-French Five-Factor Decomposition
-======================================
-Regresses portfolio excess returns on the five Fama-French factors:
-  Mkt-RF, SMB, HML, RMW, CMA
+Factor Model Decomposition (FF5 + Momentum)
+============================================
+Regresses portfolio excess returns on:
+  Mkt-RF, SMB, HML, RMW (quality/profitability), CMA, Mom (Momentum)
 
 Factor data is fetched from Ken French's official data library via
 pandas-datareader. Falls back to ETF proxies (yfinance) if unavailable.
+Momentum (UMD) is included when the daily Ken French dataset is accessible;
+ETF-proxy path uses 5-factor only.
 
-Reference
----------
+References
+----------
 Fama, E.F. & French, K.R. (2015). A five-factor asset pricing model.
-Journal of Financial Economics, 116(1), 1–22.
-https://doi.org/10.1016/j.jfineco.2014.10.010
+  Journal of Financial Economics, 116(1), 1–22.
+  https://doi.org/10.1016/j.jfineco.2014.10.010
+
+Carhart, M.M. (1997). On persistence in mutual fund performance.
+  Journal of Finance, 52(1), 57–82.
+  https://doi.org/10.1111/j.1540-6261.1997.tb03808.x
+
+Novy-Marx, R. (2013). The other side of value: The gross profitability premium.
+  Journal of Financial Economics, 108(1), 1–28.
+  https://doi.org/10.1016/j.jfineco.2013.01.003
+  [Establishes RMW / gross profitability as the canonical quality factor.]
 """
 
 from __future__ import annotations
@@ -61,28 +72,46 @@ def _sig_stars(t: float) -> str:
     return ""
 
 
-def _build_result(coeffs, t_stats, r_squared, n_obs) -> dict:
-    names = ["alpha", "mkt_rf", "smb", "hml", "rmw", "cma"]
+def _build_result(coeffs, t_stats, r_squared, n_obs,
+                  factor_keys: list[str] | None = None) -> dict:
+    """
+    Build the result dict from OLS output.
+    factor_keys: ordered list of snake_case factor names (excluding alpha).
+    Defaults to the classic 5-factor set.
+    """
+    if factor_keys is None:
+        factor_keys = ["mkt_rf", "smb", "hml", "rmw", "cma"]
+
     result = {"r_squared": round(float(r_squared), 3), "n_obs": int(n_obs)}
-    for i, name in enumerate(names):
-        val = float(coeffs[i])
-        t   = float(t_stats[i])
-        if name == "alpha":
-            # Annualise daily alpha
-            val_ann = float((1 + val) ** TRADING_DAYS - 1)
-            result["alpha"]          = round(val_ann, 4)
-            result["alpha_t_stat"]   = round(t, 2)
-            result["alpha_stars"]    = _sig_stars(t)
-        else:
-            result[name]                  = round(val, 3)
-            result[f"{name}_t_stat"]      = round(t, 2)
-            result[f"{name}_stars"]       = _sig_stars(t)
+
+    # Index 0 is the intercept (alpha)
+    alpha_daily = float(coeffs[0])
+    alpha_t     = float(t_stats[0])
+    result["alpha"]        = round(float((1 + alpha_daily) ** TRADING_DAYS - 1), 4)
+    result["alpha_t_stat"] = round(alpha_t, 2)
+    result["alpha_stars"]  = _sig_stars(alpha_t)
+
+    for i, name in enumerate(factor_keys):
+        val = float(coeffs[i + 1])
+        t   = float(t_stats[i + 1])
+        result[name]                = round(val, 3)
+        result[f"{name}_t_stat"]    = round(t, 2)
+        result[f"{name}_stars"]     = _sig_stars(t)
+
+    result["factors_used"] = factor_keys
     return result
 
 
 # ── Primary: Ken French data library ─────────────────────────────────────────
 
 def _via_ken_french(returns: pd.Series) -> dict:
+    """
+    Primary path: fetch daily FF5 + Momentum from Ken French data library.
+
+    Momentum (UMD, Carhart 1997) is added to the regression when the daily
+    dataset is available. RMW serves as the quality/profitability factor
+    (Novy-Marx 2013). Falls back to 5-factor if momentum data is missing.
+    """
     import pandas_datareader.data as web
 
     start = returns.index[0].strftime("%Y-%m-%d")
@@ -93,24 +122,48 @@ def _via_ken_french(returns: pd.Series) -> dict:
         "famafrench",
         start=start,
         end=end,
-    )[0]
-    ff5 = ff5 / 100  # percent → decimal
+    )[0] / 100  # percent → decimal
 
-    df = pd.DataFrame({"R": returns}).join(ff5, how="inner").dropna()
+    # Momentum (UMD) — optional; 5-factor fallback if unavailable
+    mom_col = None
+    try:
+        mom_raw = web.DataReader(
+            "F-F_Momentum_Factor_daily", "famafrench", start=start, end=end
+        )[0] / 100
+        mom_col = mom_raw["Mom"].rename("Mom")
+    except Exception:
+        pass
+
+    df = pd.DataFrame({"R": returns}).join(ff5, how="inner")
+    if mom_col is not None:
+        df = df.join(mom_col, how="left")
+    df = df.dropna(subset=["R", "Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"])
+
     if len(df) < 60:
         raise ValueError("Insufficient overlapping observations")
 
     excess = df["R"] - df["RF"]
-    X = np.column_stack([
-        np.ones(len(df)),
-        df["Mkt-RF"].values,
-        df["SMB"].values,
-        df["HML"].values,
-        df["RMW"].values,
-        df["CMA"].values,
-    ])
-    res = _ols(X, excess.values)
-    return _build_result(res["coeffs"], res["t_stats"], res["r_squared"], res["n_obs"])
+
+    # Determine which factors to include
+    use_mom = (mom_col is not None
+               and "Mom" in df.columns
+               and df["Mom"].notna().mean() > 0.9)
+
+    factor_french_cols = ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
+    factor_keys        = ["mkt_rf", "smb", "hml", "rmw", "cma"]
+    if use_mom:
+        df_mom = df.dropna(subset=["Mom"])
+        factor_french_cols = factor_french_cols + ["Mom"]
+        factor_keys        = factor_keys + ["mom"]
+        df_reg = df_mom
+    else:
+        df_reg = df
+
+    X = np.column_stack([np.ones(len(df_reg))]
+                        + [df_reg[c].values for c in factor_french_cols])
+    res = _ols(X, (df_reg["R"] - df_reg["RF"]).values)
+    return _build_result(res["coeffs"], res["t_stats"],
+                         res["r_squared"], res["n_obs"], factor_keys)
 
 
 # ── Fallback: ETF proxies via yfinance ────────────────────────────────────────
@@ -147,7 +200,8 @@ def _via_etf_proxies(returns: pd.Series) -> dict:
         df["cma"].values,
     ])
     res = _ols(X, excess.values)
-    result = _build_result(res["coeffs"], res["t_stats"], res["r_squared"], res["n_obs"])
+    result = _build_result(res["coeffs"], res["t_stats"], res["r_squared"], res["n_obs"],
+                           ["mkt_rf", "smb", "hml", "rmw", "cma"])
     result["proxy_source"] = "etf_proxies"
     return result
 

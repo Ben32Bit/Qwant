@@ -1,30 +1,32 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useForecast } from '../../hooks/useForecast.js'
 import ForecastComposite from './ForecastComposite.jsx'
 import ForecastMethodCard from './ForecastMethodCard.jsx'
 
-const METHOD_ORDER = ['monte_carlo', 'garch', 'factor', 'hmm', 'var', 'lstm']
+const METHOD_ORDER = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
 
-const PHASE2_METHODS = new Set(['hmm', 'var', 'lstm'])
-const PHASE1_METHODS = new Set(['monte_carlo', 'garch', 'factor'])
+const PHASE2_METHODS    = new Set(['hmm', 'var', 'lstm'])
+const PHASE1_METHODS    = new Set(['xgboost', 'nbeats', 'factor'])
 
 // Typical durations for the ETA bar (milliseconds)
-const PHASE1_EST_MS = 4_000
-const PHASE2_EST_MS = 20_000   // HMM + VAR (LSTM moved to browser, so much faster)
-const LSTM_EST_MS   = 5_000    // TF.js browser inference: ~2-5s
+const PHASE1_EST_MS  = 4_000
+const XGB_EST_MS     = 3_000    // ONNX Runtime Web: ~1-3s (XGBoost)
+const NBEATS_EST_MS  = 5_000    // ONNX Runtime Web: ~3-5s (N-BEATS 12 periods)
+const PHASE2_EST_MS  = 15_000   // HMM + GP
+const LSTM_EST_MS    = 5_000    // TF.js browser inference: ~2-5s
 
 // Placeholder cards while a phase is loading
 function LoadingCard({ method, browserCompute = false }) {
   const LABELS = {
-    monte_carlo: 'Monte Carlo (GBM)',
-    garch:       'GARCH(1,1)',
-    hmm:         'Hidden Markov Model',
-    factor:      'Factor Model (FF5)',
-    var:         'VAR Multi-Asset',
-    lstm:        'Attention-LSTM',
+    xgboost: 'XGBoost Quantile',
+    nbeats:  'N-BEATS Neural',
+    hmm:     'Hidden Markov Model',
+    factor:  'Factor Model (FF5)',
+    var:     'Gaussian Process (GP)',
+    lstm:    'Attention-LSTM',
   }
   const COLORS = {
-    monte_carlo: '#4a9eff', garch: '#ffd43b', hmm: '#a855f7',
+    xgboost: '#4a9eff', nbeats: '#ffd43b', hmm: '#a855f7',
     factor: '#00d4aa', var: '#ff6b35', lstm: '#ff4757',
   }
   return (
@@ -39,63 +41,71 @@ function LoadingCard({ method, browserCompute = false }) {
 
 // ── ETA Progress Bar ──────────────────────────────────────────────────────────
 
-function EtaBar({ loading, p1StartRef, p2StartRef, lstmStartRef, timing }) {
+function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef }) {
   const [elapsed, setElapsed] = useState(0)
 
-  const activePhase = loading.phase1 ? 'p1' : loading.phase2 ? 'p2' : loading.lstm ? 'lstm' : null
+  // Priority: p1 > xgb/nbeats (show xgb if both running) > p2 > lstm
+  const activePhase = loading.phase1 ? 'p1'
+    : (loading.xgb || loading.nbeats) ? (loading.xgb ? 'xgb' : 'nbeats')
+    : loading.phase2 ? 'p2'
+    : loading.lstm   ? 'lstm'
+    : null
 
   useEffect(() => {
     if (!activePhase) { setElapsed(0); return }
-    const startRef = activePhase === 'p1' ? p1StartRef : activePhase === 'p2' ? p2StartRef : lstmStartRef
+    const startRef = activePhase === 'p1'     ? p1StartRef
+      : activePhase === 'xgb'    ? xgbStartRef
+      : activePhase === 'nbeats' ? nbeatsStartRef
+      : activePhase === 'p2'     ? p2StartRef
+      : lstmStartRef
     const tick = () => setElapsed(Date.now() - (startRef.current ?? Date.now()))
     tick()
     const id = setInterval(tick, 250)
     return () => clearInterval(id)
-  }, [activePhase, p1StartRef, p2StartRef, lstmStartRef])
+  }, [activePhase, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef])
 
   if (!activePhase) return null
 
-  const estMs    = activePhase === 'p1' ? PHASE1_EST_MS : activePhase === 'p2' ? PHASE2_EST_MS : LSTM_EST_MS
+  const estMs = activePhase === 'p1'     ? PHASE1_EST_MS
+    : activePhase === 'xgb'    ? XGB_EST_MS
+    : activePhase === 'nbeats' ? NBEATS_EST_MS
+    : activePhase === 'p2'     ? PHASE2_EST_MS
+    : LSTM_EST_MS
   const progress = Math.min(elapsed / estMs, 0.97)
   const etaMs    = Math.max(0, estMs - elapsed)
 
   const fmtEta = ms => ms >= 60_000 ? `~${Math.ceil(ms / 60_000)}m` : `~${Math.ceil(ms / 1_000)}s`
 
-  const phaseLabel = activePhase === 'p1' ? 'Phase 1 (server)' : activePhase === 'p2' ? 'Phase 2 (server)' : 'Phase 2 (browser)'
-  const methods = activePhase === 'p1'
-    ? 'Monte Carlo · GARCH · Factor Model'
-    : activePhase === 'p2'
-    ? 'Hidden Markov Model · VAR'
-    : 'Attention-LSTM · TF.js MC Dropout'
+  const isBrowser = activePhase !== 'p1' && activePhase !== 'p2'
+  const color = isBrowser ? 'var(--accent-green)' : 'var(--accent-blue)'
 
-  const color = activePhase === 'lstm' ? 'var(--accent-red)' : 'var(--accent-blue)'
-  const gradient = activePhase === 'lstm'
-    ? 'linear-gradient(90deg, #ff4757, #a855f7)'
-    : 'linear-gradient(90deg, var(--accent-blue), #00d4aa)'
+  const LABELS = {
+    p1:     'Phase 1 (server): XGBoost features · N-BEATS features · Factor Model',
+    xgb:    'Phase 1B (browser): XGBoost · 5 quantile ONNX models',
+    nbeats: 'Phase 1B (browser): N-BEATS · 12-period recursive · pure-JS weights',
+    p2:     'Phase 2 (server): Hidden Markov Model · VAR',
+    lstm:   'Phase 3 (browser): Attention-LSTM · TF.js MC Dropout',
+  }
+  const GRADIENTS = {
+    p1:     'linear-gradient(90deg, var(--accent-blue), #00d4aa)',
+    xgb:    'linear-gradient(90deg, #4a9eff, #00d4aa)',
+    nbeats: 'linear-gradient(90deg, #ffd43b, #00d4aa)',
+    p2:     'linear-gradient(90deg, var(--accent-blue), #a855f7)',
+    lstm:   'linear-gradient(90deg, #ff4757, #a855f7)',
+  }
 
   return (
     <div className="rounded-lg border px-4 py-3"
       style={{ borderColor: `${color}33`, background: `${color}0a` }}>
       <div className="flex items-center justify-between mb-2">
-        <span className="mono text-xs" style={{ color }}>
-          ⟳ {phaseLabel}: {methods}
-        </span>
-        <span className="mono text-xs font-bold" style={{ color }}>
-          ETA {fmtEta(etaMs)}
-        </span>
+        <span className="mono text-xs" style={{ color }}>⟳ {LABELS[activePhase]}</span>
+        <span className="mono text-xs font-bold" style={{ color }}>ETA {fmtEta(etaMs)}</span>
       </div>
       <div className="rounded-full overflow-hidden" style={{ height: 4, background: 'var(--border)' }}>
         <div className="h-full rounded-full"
-          style={{ width: `${progress * 100}%`, background: gradient, transition: 'width 0.25s linear' }}
+          style={{ width: `${progress * 100}%`, background: GRADIENTS[activePhase], transition: 'width 0.25s linear' }}
         />
       </div>
-      {(loading.phase2 || loading.lstm) && (
-        <p className="mono text-xs mt-2" style={{ color: 'rgba(136,136,160,0.7)' }}>
-          {loading.lstm
-            ? 'Running 200 MC Dropout passes in your browser — no server cost.'
-            : 'Phase 1 results shown below. HMM · VAR loading from server.'}
-        </p>
-      )}
     </div>
   )
 }
@@ -103,10 +113,10 @@ function EtaBar({ loading, p1StartRef, p2StartRef, lstmStartRef, timing }) {
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export default function ForecastPanel({ backtest, portfolio }) {
-  const { results, meta, loading, error, run, hasData, timing, p1StartRef, p2StartRef, lstmStartRef } =
+  const { results, meta, loading, error, run, hasData, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef } =
     useForecast(backtest, portfolio)
 
-  const isRunning = loading.phase1 || loading.phase2 || loading.lstm
+  const isRunning = loading.phase1 || loading.xgb || loading.nbeats || loading.phase2 || loading.lstm
 
   // Last historical portfolio value — anchor for projecting actual dollar values
   const lastValue = backtest?.equity_curve?.at(-1)?.value ?? null
@@ -156,9 +166,10 @@ export default function ForecastPanel({ backtest, portfolio }) {
           <EtaBar
             loading={loading}
             p1StartRef={p1StartRef}
+            xgbStartRef={xgbStartRef}
+            nbeatsStartRef={nbeatsStartRef}
             p2StartRef={p2StartRef}
             lstmStartRef={lstmStartRef}
-            timing={timing}
           />
         )}
 
@@ -176,7 +187,7 @@ export default function ForecastPanel({ backtest, portfolio }) {
             <div className="mono text-4xl mb-4 opacity-20 select-none" style={{ color: 'var(--accent-blue)' }}>◈</div>
             <p className="mono text-sm mb-1" style={{ color: 'var(--text-primary)' }}>6 probabilistic forecast methods</p>
             <p className="text-xs max-w-sm" style={{ color: 'var(--text-secondary)' }}>
-              Monte Carlo · GARCH · Factor Model · HMM Regimes · VAR · Attention-LSTM
+              XGBoost · N-BEATS · Factor Model · HMM Regimes · VAR · Attention-LSTM
             </p>
             <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
               All methods cite peer-reviewed research and use strict walk-forward out-of-sample testing.
@@ -202,9 +213,17 @@ export default function ForecastPanel({ backtest, portfolio }) {
               const inPhase1 = PHASE1_METHODS.has(method)
               const inPhase2 = PHASE2_METHODS.has(method)
 
-              const isLstmBrowserLoading = method === 'lstm' && loading.lstm
-              if (!result && ((inPhase1 && loading.phase1) || (inPhase2 && loading.phase2) || isLstmBrowserLoading)) {
-                return <LoadingCard key={method} method={method} browserCompute={isLstmBrowserLoading} />
+              const isXgbBrowserLoading    = method === 'xgboost' && loading.xgb
+              const isNbeatsBrowserLoading = method === 'nbeats'  && loading.nbeats
+              const isLstmBrowserLoading   = method === 'lstm'    && loading.lstm
+
+              // Show skeleton during server phases
+              if (!result && ((inPhase1 && loading.phase1) || (inPhase2 && loading.phase2))) {
+                return <LoadingCard key={method} method={method} />
+              }
+              // Show browser-compute card during ONNX/TF.js inference
+              if (isXgbBrowserLoading || isNbeatsBrowserLoading || isLstmBrowserLoading) {
+                return <LoadingCard key={method} method={method} browserCompute />
               }
               if (!result) return null
               return (

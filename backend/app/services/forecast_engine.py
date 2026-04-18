@@ -63,29 +63,30 @@ TRADING_DAYS = 252
 # Damodaran, A. (2024). Equity Risk Premiums: Determinants, Estimation and
 #   Implications. NYU Stern Working Paper.
 FACTOR_PREMIA = {
-    "mkt_rf": 0.053,   # Market excess return (Damodaran US ERP estimate)
-    "smb":    0.020,   # Size premium
+    "mkt_rf": 0.053,   # Market excess return (Damodaran 2024 US ERP)
+    "smb":    0.020,   # Size premium (Fama & French 1993)
     "hml":    0.035,   # Value premium
-    "rmw":    0.035,   # Profitability premium
+    "rmw":    0.035,   # Profitability / quality premium (Novy-Marx 2013)
     "cma":    0.025,   # Investment premium
+    "mom":    0.038,   # Momentum premium (Carhart 1997; Asness, Moskowitz & Pedersen 2013)
 }
 
 # Method colours for the frontend
 METHOD_COLORS = {
-    "monte_carlo": "#4a9eff",   # blue
-    "garch":       "#ffd43b",   # amber
+    "xgboost":     "#4a9eff",   # blue  (replaced Monte Carlo GBM)
+    "nbeats":      "#ffd43b",   # amber  (replaced GARCH(1,1))
     "hmm":         "#a855f7",   # purple
     "factor":      "#00d4aa",   # teal
-    "var":         "#ff6b35",   # orange
+    "var":         "#ff6b35",   # orange  (now GP)
     "lstm":        "#ff4757",   # red
 }
 
 METHOD_LABELS = {
-    "monte_carlo": "Monte Carlo (GBM)",
-    "garch":       "GARCH(1,1)",
+    "xgboost":     "XGBoost Quantile",
+    "nbeats":      "N-BEATS Neural",
     "hmm":         "Hidden Markov Model",
-    "factor":      "Factor Model (FF5)",
-    "var":         "VAR Multi-Asset",
+    "factor":      "Factor Model (FF5+Mom)",
+    "var":         "Gaussian Process (GP)",
     "lstm":        "LSTM Neural Net",
 }
 
@@ -138,180 +139,239 @@ def _ledoit_wolf_cov(returns_df: pd.DataFrame) -> np.ndarray:
     return lw.covariance_ * TRADING_DAYS   # annualise
 
 
-# ── 1. Monte Carlo — Geometric Brownian Motion ───────────────────────────────
+# ── 1. XGBoost Quantile — Client-Side Feature Preparation ────────────────────
+#
+# XGBoost gradient-boosted quantile regressors now replace Monte Carlo GBM.
+# GBM assumes a random walk with constant μ and σ — it cannot learn from
+# momentum, vol regimes, or cross-sectional patterns. XGBoost, by contrast,
+# learns nonlinear interactions between 9 market microstructure features.
+#
+# Reference: Gu, Kelly & Xiu (2020, RFS) — XGBoost dominates all parametric
+# models on OOS stock return prediction across 900+ firm characteristics.
+#
+# Like the Attention-LSTM, the XGBoost models run CLIENT-SIDE via ONNX
+# Runtime Web. The server's role is ONLY feature engineering.
+#
+# Training script:  backend/scripts/train_xgboost.py
+# ONNX models:      frontend/public/models/xgboost/q{05,25,50,75,95}.onnx
+#
+# The ONNX models include StandardScaler as preprocessing nodes (Pipeline →
+# ONNX), so XGBoostInferer.js passes raw unscaled features directly.
+#
+# Fan chart extrapolation (client-side, 21d → 252d):
+#   The models predict 21-day cumulative return distributions.
+#   For the 252-day chart, the client scales the 21-day bands using:
+#     median(t) = (1 + p50_21d)^(t/21) − 1
+#     spread(t) = half_spread_21d × sqrt(t/21)   [i.i.d. scaling]
+#
+# References
+# ----------
+# Chen, T. & Guestrin, C. (2016). XGBoost: A Scalable Tree Boosting System.
+#   KDD '16. https://doi.org/10.1145/2939672.2939785
+# Gu, S., Kelly, B., & Xiu, D. (2020). Empirical Asset Pricing via Machine
+#   Learning. Review of Financial Studies, 33(5), 2223–2273.
+#   https://doi.org/10.1093/rfs/hhaa009
+# Friedman, J.H. (2001). Greedy function approximation: a gradient boosting
+#   machine. Annals of Statistics, 29(5), 1189–1232.
+#   https://doi.org/10.1214/aos/1013203451
+# López de Prado, M. (2018). Advances in Financial Machine Learning, Ch. 7.
 
-def forecast_monte_carlo(
+def prepare_xgboost_features(
     returns: pd.Series,
     horizon: int,
-    n_paths: int,
     last_date: str,
 ) -> dict:
     """
-    Simulate portfolio paths under Geometric Brownian Motion.
+    Compute 14 raw (unscaled) predictive features from the portfolio return series
+    plus live macro/VIX data from FRED and yfinance.
 
-    Under GBM the log-return over dt follows:
-        log(S_t / S_0) = (μ - σ²/2)·dt + σ·√dt·Z,   Z ~ N(0,1)
+    The ONNX Pipeline includes StandardScaler, so the client passes raw values.
 
-    μ and σ are estimated from the full historical return series.
-    Paths are computed in one vectorised call — no Python loop.
-
-    References
-    ----------
-    Black, F. & Scholes, M. (1973). The pricing of options and corporate
-      liabilities. Journal of Political Economy, 81(3), 637–654.
-      https://doi.org/10.1086/260062
-
-    Merton, R.C. (1969). Lifetime portfolio selection under uncertainty:
-      the continuous-time case. Review of Economics and Statistics, 51(3),
-      247–257. https://doi.org/10.2307/1926560
-
-    Out-of-sample note
+    Price features (9)
     ------------------
-    GBM is a parametric model with only two free parameters (μ, σ).
-    With two parameters and thousands of observations, overfitting is
-    negligible. The main estimation risk is regime non-stationarity;
-    the fan width naturally reflects parameter uncertainty via the
-    spread of N(0,1) draws across 1,000 paths.
+    ret_1d, ret_5d, ret_21d, ret_63d : multi-horizon momentum
+    vol_21d, vol_63d                  : realized vol (annualised)
+    mom_12_1                          : 12-month minus 1-month momentum
+    rsi_14                            : 14-day RSI (range 0–1)
+    vol_ratio                         : vol_21d / vol_63d (vol regime)
+
+    Macro features (5)
+    ------------------
+    yield_curve_10y2y : 10Y-2Y Treasury spread (recession/expansion)
+    credit_spread_baa : BAA-10Y credit spread  (risk-off proxy)
+    vix_pct_rank      : VIX percentile rank vs 2Y history (0–1)
+    vix_term_slope    : VIX3M/VIX − 1 (contango = bullish)
+    real_yield_10y    : 10Y TIPS yield (financial conditions tightness)
+
+    Falls back gracefully: if FRED/VIX are unavailable, neutral historical
+    averages are appended instead so inference always returns a result.
+
+    Note: retrain the ONNX models via scripts/train_xgboost.py whenever
+    the feature list changes. The meta.json n_features field is the
+    authoritative feature count — the client uses it for tensor shape.
     """
-    t0 = time.time()
-    mu    = float(returns.mean() * TRADING_DAYS)
-    sigma = float(returns.std() * np.sqrt(TRADING_DAYS))
+    MIN_OBS = 63
+    if len(returns) < MIN_OBS:
+        raise ValueError(
+            f"Insufficient history for XGBoost: need ≥{MIN_OBS} trading days, "
+            f"got {len(returns)}. Try a longer backtest date range."
+        )
 
-    dt         = 1 / TRADING_DAYS
-    drift      = (mu - 0.5 * sigma ** 2) * dt
-    diffusion  = sigma * np.sqrt(dt)
+    r = returns.copy()
+    n = len(r)
 
-    Z      = np.random.standard_normal((horizon, n_paths))
-    log_r  = drift + diffusion * Z
-    # Cumulative product from the last historical value (rebased to 1.0)
-    paths  = np.exp(np.cumsum(log_r, axis=0)) - 1.0   # cumulative % return
+    # ── Price features ────────────────────────────────────────────────────────
+    ret_1d  = float(r.iloc[-1])
+    ret_5d  = float(r.iloc[-5:].sum())
+    ret_21d = float(r.iloc[-21:].sum())
+    ret_63d = float(r.iloc[-63:].sum())
 
-    dates  = _forecast_dates(last_date, horizon)
-    band   = _paths_to_band(paths, dates)
+    vol_21d = float(r.iloc[-21:].std() * np.sqrt(TRADING_DAYS))
+    vol_63d = float(r.iloc[-63:].std() * np.sqrt(TRADING_DAYS))
+
+    if n >= TRADING_DAYS:
+        mom_12_1 = float(r.iloc[-TRADING_DAYS:-21].sum())
+    elif n >= 42:
+        mom_12_1 = float(r.iloc[:-21].sum())
+    else:
+        mom_12_1 = 0.0
+
+    delta  = r.diff().dropna()
+    gain   = delta.clip(lower=0).rolling(14).mean()
+    loss   = (-delta.clip(upper=0)).rolling(14).mean()
+    rsi_14 = float(gain.iloc[-1] / (gain.iloc[-1] + loss.iloc[-1] + 1e-9))
+
+    vol_ratio = vol_21d / (vol_63d + 1e-9)
+
+    price_features = [ret_1d, ret_5d, ret_21d, ret_63d,
+                      vol_21d, vol_63d, mom_12_1, rsi_14, vol_ratio]
+
+    # ── Macro features ────────────────────────────────────────────────────────
+    macro_available = False
+    try:
+        from .fred_provider import get_macro_features
+        from .vix_provider  import get_vix_features
+
+        fred = get_macro_features(as_of_date=last_date)
+        vix  = get_vix_features(as_of_date=last_date)
+        macro_available = fred.get("available", False) or vix.get("available", False)
+
+        macro_features = [
+            fred["yield_curve_10y2y"],
+            fred["credit_spread_baa"],
+            vix["vix_pct_rank"],
+            vix["vix_term_slope"],
+            fred["real_yield_10y"],
+        ]
+        macro_context = {
+            "vix_spot":             vix.get("vix_spot"),
+            "vix_pct_rank":         vix.get("vix_pct_rank"),
+            "vix_term_slope":       vix.get("vix_term_slope"),
+            "vix_contango":         vix.get("vix_contango"),
+            "yield_curve_10y2y":    fred.get("yield_curve_10y2y"),
+            "credit_spread_baa":    fred.get("credit_spread_baa"),
+            "real_yield_10y":       fred.get("real_yield_10y"),
+            "yield_curve_pct_rank": fred.get("yield_curve_pct_rank"),
+            "credit_pct_rank":      fred.get("credit_pct_rank"),
+            "macro_available":      macro_available,
+        }
+    except Exception as exc:
+        logger.warning("prepare_xgboost_features: macro fetch failed (%s) — using neutrals", exc)
+        macro_features = [0.60, 2.20, 0.50, 0.05, 0.50]   # long-run neutral values
+        macro_context  = {"macro_available": False}
+
+    features = price_features + macro_features
+    feature_names = [
+        "ret_1d", "ret_5d", "ret_21d", "ret_63d",
+        "vol_21d", "vol_63d", "mom_12_1", "rsi_14", "vol_ratio",
+        "yield_curve_10y2y", "credit_spread_baa",
+        "vix_pct_rank", "vix_term_slope", "real_yield_10y",
+    ]
+
     return {
-        "band": band,
-        "metadata": {
-            "mu_ann":    round(mu, 4),
-            "sigma_ann": round(sigma, 4),
-            "n_obs":     len(returns),
-        },
-        "compute_ms": int((time.time() - t0) * 1000),
+        "features":       features,
+        "feature_names":  feature_names,
+        "forecast_dates": _forecast_dates(last_date, horizon),
+        # Display metadata for the card
+        "ret_21d_ann":    round(ret_21d * (TRADING_DAYS / 21), 4),
+        "vol_21d_ann":    round(vol_21d, 4),
+        "rsi_14":         round(rsi_14, 3),
+        "vol_regime":     "high" if vol_ratio > 1.2 else "low" if vol_ratio < 0.8 else "normal",
+        "n_obs":          n,
+        "macro_context":  macro_context,
     }
 
 
-# ── 2. GARCH(1,1) ─────────────────────────────────────────────────────────────
+# ── 2. N-BEATS — Client-Side Feature Preparation ─────────────────────────────
+#
+# N-BEATS (Neural Basis Expansion Analysis) replaces GARCH(1,1).
+# GARCH forecasts conditional variance only and assumes returns are Gaussian.
+# N-BEATS provides multi-horizon interpretable return forecasts via stacked
+# residual MLP blocks; each block backcasts what it "explains" from the input.
+#
+# Like XGBoost and Attention-LSTM, N-BEATS runs CLIENT-SIDE via ONNX Runtime Web.
+# The server returns only the last 30 days of returns (the input window).
+#
+# Training script:  backend/scripts/train_nbeats.py
+# ONNX model:       frontend/public/models/nbeats/model.onnx
+#
+# Model I/O (after z-score normalisation using training mu_r/sigma_r):
+#   Input:  [1, 30]    — last 30 daily returns (normalised)
+#   Output: [1, 21, 5] — 21-day × 5-quantile forecast (normalised daily returns)
+#
+# Fan chart (client-side, 12 recursive 21-day periods → 252 days):
+#   The client runs the model 12 times; each iteration uses p50 of the previous
+#   forecast as the new input window (direct multi-step rollout).
+#   This gives a proper compound-return fan chart with uncertainty that grows
+#   organically from the model's learned sequence dynamics.
+#
+# References
+# ----------
+# Oreshkin, B., Carpov, D., Chapados, N., & Bengio, Y. (2020).
+#   N-BEATS: Neural Basis Expansion Analysis for Interpretable Time Series
+#   Forecasting. ICLR 2020. https://arxiv.org/abs/1905.10437
+# Koenker, R. & Bassett, G. (1978). Regression Quantiles.
+#   Econometrica, 46(1), 33–50. https://doi.org/10.2307/1913643
+# López de Prado, M. (2018). Advances in Financial Machine Learning, Ch. 7.
 
-def forecast_garch(
+def prepare_nbeats_features(
     returns: pd.Series,
     horizon: int,
-    n_paths: int,
     last_date: str,
 ) -> dict:
     """
-    Simulate portfolio paths using GARCH(1,1)-fitted conditional volatility.
+    Prepare the 30-day input window for client-side N-BEATS inference.
 
-    GARCH(1,1) models time-varying variance:
-        σ²_t = ω + α·ε²_{t-1} + β·σ²_{t-1}
+    The ONNX model was trained on z-score normalised returns (global μ/σ
+    from the training universe saved in meta.json). NBeatsInferer.js applies
+    the same normalisation before inference and reverses it after.
 
-    where α+β controls persistence. Parameters are estimated via MLE on an
-    80% training window; the held-out 20% is used to validate residuals
-    (Ljung-Box test for remaining autocorrelation, sign-bias test).
-
-    Simulation uses bootstrapped standardised residuals from the training
-    set rather than Gaussian draws, preserving empirical fat tails and
-    skewness without distributional assumptions.
-
-    References
-    ----------
-    Engle, R.F. (1982). Autoregressive conditional heteroscedasticity with
-      estimates of the variance of United Kingdom inflation. Econometrica,
-      50(4), 987–1007. https://doi.org/10.2307/1912773
-
-    Bollerslev, T. (1986). Generalized autoregressive conditional
-      heteroscedasticity. Journal of Econometrics, 31(3), 307–327.
-      https://doi.org/10.1016/0304-4076(86)90063-1
-
-    McNeil, A.J. & Frey, R. (2000). Estimation of tail-related risk measures
-      for heteroscedastic financial time series. Journal of Empirical Finance,
-      7(3–4), 271–300. https://doi.org/10.1016/S0927-5398(00)00012-8
-
-    Out-of-sample methodology
-    --------------------------
-    Lopez de Prado, M. (2018). Advances in Financial Machine Learning, Ch. 7.
-      Walk-forward split: 80% train, 20% held-out diagnostic window.
+    Returns the raw last-30-day returns; the client loads mu_r/sigma_r
+    from meta.json (served as static assets alongside the ONNX model).
     """
-    from arch import arch_model
+    LOOKBACK = 30
+    MIN_OBS  = LOOKBACK + LOOKBACK  # need enough history for a meaningful window
 
-    t0 = time.time()
+    if len(returns) < MIN_OBS:
+        raise ValueError(
+            f"Insufficient history for N-BEATS: need ≥{MIN_OBS} trading days, "
+            f"got {len(returns)}. Try a longer backtest date range."
+        )
 
-    # Walk-forward split: fit on 80%, validate residuals on 20%
-    n        = len(returns)
-    n_train  = max(int(n * 0.8), 60)
-    r_train  = returns.iloc[:n_train] * 100   # arch works in percent
-    r_val    = returns.iloc[n_train:]  * 100
+    last_window    = returns.iloc[-LOOKBACK:].tolist()
+    forecast_dates = _forecast_dates(last_date, horizon)
 
-    am  = arch_model(r_train, vol="Garch", p=1, q=1, dist="Normal")
-    res = am.fit(disp="off", show_warning=False)
+    # Display metadata for the card
+    recent_vol = float(returns.iloc[-21:].std() * np.sqrt(TRADING_DAYS))
+    recent_ret = float(returns.iloc[-21:].sum())
 
-    omega   = float(res.params["omega"])
-    alpha   = float(res.params["alpha[1]"])
-    beta    = float(res.params["beta[1]"])
-    persist = alpha + beta
-    longrun_var  = omega / max(1 - persist, 1e-6)
-    longrun_vol  = float(np.sqrt(longrun_var * TRADING_DAYS)) / 100
-
-    # Current conditional vol (last fitted sigma from training window)
-    current_vol = float(res.conditional_volatility.iloc[-1]) * np.sqrt(TRADING_DAYS) / 100
-
-    # Bootstrapped standardised residuals (fat-tail-preserving simulation)
-    std_resids = (r_train.values - float(res.params["mu"])) / res.conditional_volatility.values
-    std_resids = std_resids[~np.isnan(std_resids)]
-
-    mu_daily = float(res.params["mu"]) / 100   # back to decimal
-
-    # Simulate paths
-    paths = np.zeros((horizon, n_paths))
-    sigma2_0 = (res.conditional_volatility.iloc[-1] / 100) ** 2
-
-    for path_i in range(n_paths):
-        sigma2 = sigma2_0
-        cum_r  = 0.0
-        for t in range(horizon):
-            z      = np.random.choice(std_resids)
-            eps    = np.sqrt(sigma2) * z
-            r_t    = mu_daily + eps
-            cum_r  = (1 + cum_r) * (1 + r_t) - 1
-            paths[t, path_i] = cum_r
-            # Cap sigma to 3× long-run to prevent near-integrated explosion
-            sigma2 = min(omega + alpha * eps**2 + beta * sigma2,
-                         9 * longrun_var / TRADING_DAYS)
-
-    # Validate residuals on held-out window
-    oos_ok = True
-    try:
-        am_val = arch_model(r_val, vol="Garch", p=1, q=1, dist="Normal")
-        from statsmodels.stats.diagnostic import acorr_ljungbox
-        resid_val = r_val.values - float(res.params["mu"])
-        lb = acorr_ljungbox(resid_val ** 2, lags=[10], return_df=True)
-        oos_ok = bool(lb["lb_pvalue"].iloc[0] > 0.05)
-    except Exception:
-        pass
-
-    dates = _forecast_dates(last_date, horizon)
-    band  = _paths_to_band(paths, dates)
     return {
-        "band": band,
-        "metadata": {
-            "omega":           round(omega, 6),
-            "alpha":           round(alpha, 4),
-            "beta":            round(beta, 4),
-            "persistence":     round(persist, 4),
-            "current_vol_ann": round(current_vol, 4),
-            "longrun_vol_ann": round(longrun_vol, 4),
-            "oos_ljungbox_ok": oos_ok,
-            "train_n":         n_train,
-        },
-        "compute_ms": int((time.time() - t0) * 1000),
+        "last_window":    last_window,       # raw 30 daily returns (un-normalised)
+        "forecast_dates": forecast_dates,
+        "lookback":       LOOKBACK,
+        "vol_21d_ann":    round(recent_vol, 4),
+        "ret_21d":        round(recent_ret, 4),
+        "n_obs":          len(returns),
     }
 
 
@@ -485,20 +545,20 @@ def forecast_factor(
     # If FF5 decomposition available, use its loadings; else fall back to
     # naive historical mean (flagged in metadata)
     if ff5 and all(k in ff5 for k in ("mkt_rf", "smb", "hml", "rmw", "cma", "alpha")):
-        mu_ann = (
-            0.05                                          # risk-free rate
-            + ff5["mkt_rf"] * FACTOR_PREMIA["mkt_rf"]
-            + ff5["smb"]    * FACTOR_PREMIA["smb"]
-            + ff5["hml"]    * FACTOR_PREMIA["hml"]
-            + ff5["rmw"]    * FACTOR_PREMIA["rmw"]
-            + ff5["cma"]    * FACTOR_PREMIA["cma"]
-            + ff5.get("alpha", 0.0)
-        )
-        # Idiosyncratic vol: total vol × sqrt(1 - R²)
+        # Sum all factor contributions — includes Momentum (mom) if the
+        # decomposition was run via Ken French path (Phase 2C upgrade).
+        # RMW is the quality/profitability factor (Novy-Marx 2013).
+        mu_ann = 0.05  # risk-free anchor
+        for factor, premium in FACTOR_PREMIA.items():
+            beta = ff5.get(factor, 0.0)
+            mu_ann += beta * premium
+        mu_ann += ff5.get("alpha", 0.0)
+
         total_vol = float(returns.std() * np.sqrt(TRADING_DAYS))
         r2        = ff5.get("r_squared", 0.0)
         idio_vol  = total_vol * np.sqrt(max(1.0 - r2, 0.01))
-        source    = "ff5"
+        factors_used = ff5.get("factors_used", ["mkt_rf","smb","hml","rmw","cma"])
+        source       = f"ff{len(factors_used)}"
     else:
         # Fallback: naive historical mean + full vol (no factor decomp)
         mu_ann   = float(returns.mean() * TRADING_DAYS)
@@ -522,137 +582,167 @@ def forecast_factor(
             "idio_vol_ann":   round(idio_vol, 4),
             "r_squared":      round(ff5.get("r_squared", 0.0) if ff5 else 0.0, 3),
             "source":         source,
+            "n_factors":      len(ff5.get("factors_used", ["mkt_rf","smb","hml","rmw","cma"])) if ff5 else 1,
+            "mom_beta":       round(ff5.get("mom", 0.0), 3) if ff5 else None,
+            "rmw_beta":       round(ff5.get("rmw", 0.0), 3) if ff5 else None,
             "factor_premia":  FACTOR_PREMIA,
         },
         "compute_ms": int((time.time() - t0) * 1000),
     }
 
 
-# ── 5. VAR — Vector Autoregression ───────────────────────────────────────────
+# ── 5. Gaussian Process Autoregression (replaces VAR, Phase 2D) ──────────────
+#
+# VAR required individual asset return matrices and made stationarity +
+# multivariate normality assumptions. GP autoregression (GPAR) replaces it
+# with a Bayesian nonparametric model that:
+#   - Works on portfolio-level returns directly (no asset price refetch)
+#   - Provides exact posterior uncertainty — no Monte Carlo needed
+#   - Has no stationarity requirement
+#   - Automatically tunes complexity via marginal likelihood maximisation
+#
+# Architecture:
+#   Input X: rolling 7-day return window (ARD Matérn features per lag)
+#   Kernel:  ConstantKernel × Matérn(ν=5/2, ARD) + WhiteKernel
+#   Output:  one-step predictive N(μ_t, σ_t²)
+#   Rollout: 252 steps, advancing window with predictive mean
+#   Fan chart: cumulative returns ~ N(Σμ_t, Σσ_t²) (Gaussian approximation)
+#
+# References
+# ----------
+# Rasmussen, C.E. & Williams, C.K.I. (2006). Gaussian Processes for Machine
+#   Learning. MIT Press. https://gaussianprocess.org/gpml/
+# Matérn, B. (1960). Spatial Variation. Meddelanden från Statens
+#   Skogsforskningsinstitut, 49(5). [ν=5/2 yields twice-differentiable paths]
+# Roberts, S. et al. (2013). Gaussian Processes for time series modelling.
+#   Phil. Trans. R. Soc. A, 371. https://doi.org/10.1098/rsta.2011.0550
+# López de Prado, M. (2018). Advances in Financial Machine Learning, Ch. 7.
 
-def forecast_var(
-    asset_returns: pd.DataFrame,
-    weights: dict,
+def forecast_gp(
+    returns: pd.Series,
     horizon: int,
-    n_paths: int,
     last_date: str,
 ) -> dict:
     """
-    VAR(p) fitted to the individual asset return matrix; portfolio returns
-    are reconstructed from w^T · y_t at each simulation step.
+    Gaussian Process autoregression for 252-day portfolio return forecasting.
 
-    Lag order p is selected by AIC (up to lag 5) to balance fit and
-    parsimony. The model is estimated on an 80% training window; out-of-
-    sample R² and Granger-causality tests are computed on the held-out 20%
-    to verify that cross-asset predictability is genuine, not spurious.
+    Fits an ARD Matérn 5/2 GP on the most recent daily returns using a
+    rolling-window autoregressive framing (X = last 7 returns, y = next return).
+    Capped at 300 training samples for O(n³) tractability.
 
-    Simulation: draw residuals from N(0, Σ_OOS) where Σ_OOS is the
-    residual covariance on the held-out window, avoiding in-sample
-    covariance inflation.
+    OOS methodology (López de Prado 2018):
+      Chronological 80/20 split. Held-out 20% used to compute predictive R²
+      (skill) and NLPD (calibration quality — lower is better).
 
-    References
-    ----------
-    Sims, C.A. (1980). Macroeconomics and reality. Econometrica, 48(1),
-      1–48. https://doi.org/10.2307/1912017
-
-    Campbell, J.Y., Chan, Y.L., & Viceira, L.M. (2003). A multivariate
-      model of strategic asset allocation. Journal of Financial Economics,
-      67(1), 41–80. https://doi.org/10.1016/S0304-405X(02)00231-3
-
-    Cochrane, J.H. & Piazzesi, M. (2005). Bond risk premia. American
-      Economic Review, 95(1), 138–160.
-      https://doi.org/10.1257/0002828053828581
-
-    Out-of-sample methodology
-    --------------------------
-    Lopez de Prado, M. (2018). Advances in Financial Machine Learning, Ch. 7.
-      Walk-forward 80/20 split; residual covariance estimated on OOS window.
-    Diebold, F.X. & Mariano, R.S. (1995). Comparing predictive accuracy.
-      Journal of Business & Economic Statistics, 13(3), 253–263.
-      https://doi.org/10.1080/07350015.1995.10524599
+    Fan chart (Gaussian approximation):
+      Cumulative return at step T ≈ N(Σμ_t, Σσ_t²) under the independence
+      approximation — exact for uncorrelated Gaussian daily returns.
     """
-    from statsmodels.tsa.vector_ar.var_model import VAR
+    from sklearn.gaussian_process import GaussianProcessRegressor
+    from sklearn.gaussian_process.kernels import Matern, WhiteKernel, ConstantKernel
+    from scipy.stats import norm as scipy_norm
 
     t0 = time.time()
 
-    tickers = [t for t in weights if t in asset_returns.columns]
-    if len(tickers) < 2:
-        raise ValueError("VAR requires ≥2 assets with available returns")
+    LOOKBACK     = 7    # one trading week of lags as GP features
+    N_TRAIN_MAX  = 300  # cap for O(n³) tractability
 
-    w  = np.array([weights[t] for t in tickers])
-    df = asset_returns[tickers].dropna()
+    r = returns.values
+    n = len(r)
 
-    n        = len(df)
-    n_train  = max(int(n * 0.8), 60)
-    df_train = df.iloc[:n_train]
-    df_val   = df.iloc[n_train:]
+    if n < LOOKBACK + 40:
+        raise ValueError(
+            f"GP requires ≥{LOOKBACK + 40} observations, got {n}. "
+            "Try a longer backtest date range."
+        )
 
-    # AIC lag selection (cap at 5 to prevent overfitting for large K)
-    model     = VAR(df_train)
-    max_lag   = min(5, n_train // (2 * len(tickers)))
-    try:
-        res = model.fit(maxlags=max(1, max_lag), ic="aic")
-    except Exception:
-        res = model.fit(1)
+    # Build autoregressive sequences
+    X_all = np.array([r[i - LOOKBACK:i] for i in range(LOOKBACK, n)])
+    y_all = r[LOOKBACK:]
 
-    p = res.k_ar
+    # Most-recent N_TRAIN_MAX points (chronological — no shuffle)
+    X_fit = X_all[-N_TRAIN_MAX:]
+    y_fit = y_all[-N_TRAIN_MAX:]
+    n_fit = len(X_fit)
 
-    # OOS residual covariance (not in-sample — avoids covariance inflation)
-    if len(df_val) > p:
-        val_resid = []
-        last_train_vals = df_train.values
-        for i in range(len(df_val) - p):
-            y_hat = res.forecast(last_train_vals[-(p):], steps=1)[0]
-            y_act = df_val.values[i]
-            val_resid.append(y_act - y_hat)
-            last_train_vals = np.vstack([last_train_vals, y_act])
-        val_resid = np.array(val_resid)
-        sigma_oos = np.cov(val_resid.T)
-        oos_r2    = float(1 - np.var(val_resid) / np.var(df_val.values[p:]))
-    else:
-        sigma_oos = np.array(res.sigma_u)
-        oos_r2    = None
+    # Chronological 80/20 OOS split
+    n_tr  = max(int(n_fit * 0.8), 30)
+    X_tr, y_tr   = X_fit[:n_tr], y_fit[:n_tr]
+    X_val, y_val = X_fit[n_tr:], y_fit[n_tr:]
 
-    # Granger causality — any cross-variable predictability?
-    granger_sig = False
-    try:
-        gc_test = res.test_causality(tickers[0], tickers[1:], kind="f")
-        granger_sig = bool(gc_test.pvalue < 0.10)
-    except Exception:
-        pass
+    # ARD Matérn 5/2: each lag gets its own length scale (7 hyperparameters).
+    # ConstantKernel adjusts signal amplitude; WhiteKernel absorbs noise floor.
+    kernel = (
+        ConstantKernel(1.0, (1e-4, 1e2))
+        * Matern(length_scale=np.ones(LOOKBACK),
+                 length_scale_bounds=(1e-3, 10.0), nu=2.5)
+        + WhiteKernel(noise_level=float(np.var(y_tr)) + 1e-8,
+                      noise_level_bounds=(1e-8, 1.0))
+    )
 
-    # Simulate
-    K = len(tickers)
-    try:
-        L = np.linalg.cholesky(sigma_oos + 1e-8 * np.eye(K))
-    except np.linalg.LinAlgError:
-        L = np.diag(np.sqrt(np.diag(sigma_oos) + 1e-8))
+    gp = GaussianProcessRegressor(
+        kernel=kernel,
+        alpha=0,              # noise modelled entirely by WhiteKernel
+        n_restarts_optimizer=3,
+        normalize_y=True,
+    )
+    gp.fit(X_tr, y_tr)
 
-    last_vals = df.values[-p:]  # seed simulation from full history end
-    paths     = np.zeros((horizon, n_paths))
+    # OOS diagnostics
+    oos_r2 = nlpd = None
+    if len(y_val) > 1:
+        mu_val, std_val = gp.predict(X_val, return_std=True)
+        ss_res  = float(np.sum((y_val - mu_val) ** 2))
+        ss_tot  = float(np.sum((y_val - y_val.mean()) ** 2))
+        oos_r2  = round(1 - ss_res / ss_tot, 4) if ss_tot > 0 else None
+        # Negative log predictive density (calibration — lower = better)
+        nlpd = round(float(np.mean(
+            0.5 * np.log(2 * np.pi * std_val ** 2)
+            + (y_val - mu_val) ** 2 / (2 * std_val ** 2 + 1e-10)
+        )), 4)
 
-    for path_i in range(n_paths):
-        hist  = list(last_vals.copy())
-        cum_r = 0.0
-        for t in range(horizon):
-            y_hat = res.forecast(np.array(hist[-p:]), steps=1)[0]
-            z     = np.random.standard_normal(K)
-            y_sim = y_hat + L @ z
-            r_port = float(np.dot(w, y_sim))
-            cum_r  = (1 + cum_r) * (1 + r_port) - 1
-            paths[t, path_i] = cum_r
-            hist.append(y_sim)
+    # 252-step rollout: advance window with GP predictive mean each step
+    window = list(r[-LOOKBACK:])
+    mu_fwd  = np.empty(horizon)
+    std_fwd = np.empty(horizon)
+
+    for t in range(horizon):
+        x_t = np.array(window[-LOOKBACK:]).reshape(1, -1)
+        mu_t, std_t = gp.predict(x_t, return_std=True)
+        mu_fwd[t]   = float(mu_t[0])
+        std_fwd[t]  = float(std_t[0])
+        window.append(float(mu_t[0]))
+
+    # Cumulative fan chart via Gaussian approximation: Σr_t ~ N(Σμ_t, Σσ_t²)
+    cum_mu  = np.cumsum(mu_fwd) * 100     # percent
+    cum_std = np.sqrt(np.cumsum(std_fwd ** 2)) * 100
 
     dates = _forecast_dates(last_date, horizon)
-    band  = _paths_to_band(paths, dates)
+    band  = {
+        "dates": dates,
+        "p5":  (cum_mu + scipy_norm.ppf(0.05) * cum_std).tolist(),
+        "p25": (cum_mu + scipy_norm.ppf(0.25) * cum_std).tolist(),
+        "p50": cum_mu.tolist(),
+        "p75": (cum_mu + scipy_norm.ppf(0.75) * cum_std).tolist(),
+        "p95": (cum_mu + scipy_norm.ppf(0.95) * cum_std).tolist(),
+    }
+
+    # Extract optimised noise level for metadata
+    noise_level = None
+    for component in gp.kernel_.get_params().values():
+        if hasattr(component, "noise_level"):
+            noise_level = round(float(component.noise_level), 6)
+            break
+
     return {
         "band": band,
         "metadata": {
-            "lag_order":          p,
-            "n_assets":           K,
-            "granger_significant":granger_sig,
-            "oos_r2":             round(oos_r2, 3) if oos_r2 is not None else None,
-            "train_n":            n_train,
+            "oos_r2":      oos_r2,
+            "nlpd":        nlpd,
+            "lookback":    LOOKBACK,
+            "n_train":     n_tr,
+            "noise_level": noise_level,
+            "kernel":      "Matérn(ν=5/2, ARD) + WhiteKernel",
         },
         "compute_ms": int((time.time() - t0) * 1000),
     }
@@ -756,19 +846,6 @@ def run_all_forecasts(req) -> dict:
     h  = req.horizon_days
     np_ = req.n_paths
 
-    # Asset returns for multi-asset methods (VAR)
-    asset_returns = None
-    weights_dict  = {}
-    if any(m in req.methods for m in ("var",)):
-        from app.services.data_service import fetch_prices
-        tickers = [a.ticker for a in req.assets]
-        weights_dict = {a.ticker: a.weight for a in req.assets}
-        try:
-            prices = fetch_prices(tickers, req.start_date, req.end_date)
-            asset_returns = prices.pct_change().dropna()
-        except Exception as e:
-            logger.warning("VAR: could not fetch asset prices: %s", e)
-
     # Forecast end date
     forecast_dates = _forecast_dates(last_date, h)
     forecast_end   = forecast_dates[-1] if forecast_dates else last_date
@@ -779,18 +856,46 @@ def run_all_forecasts(req) -> dict:
         label = METHOD_LABELS.get(method, method)
         color = METHOD_COLORS.get(method, "#888888")
         try:
-            if method == "monte_carlo":
-                out = forecast_monte_carlo(returns, h, np_, last_date)
+            if method == "xgboost":
+                # XGBoost runs client-side via ONNX Runtime Web (Phase 2A upgrade).
+                # Server returns 9 raw features; ONNX Pipeline handles scaling.
+                out = prepare_xgboost_features(returns, h, last_date)
+                results.append(MethodResult(
+                    method=method, label=label, color=color,
+                    forecast=None,
+                    metadata={
+                        "client_side":    True,
+                        "xgb_features":   out,
+                        "model":          "GradientBoostingRegressor (sklearn)",
+                        "quantiles":      [0.05, 0.25, 0.50, 0.75, 0.95],
+                        "horizon_days":   21,
+                    },
+                ))
+                continue
+            elif method == "nbeats":
+                # N-BEATS runs client-side via ONNX Runtime Web (Phase 2B upgrade).
+                # Server returns last-30-day return window; client normalises + infers.
+                out = prepare_nbeats_features(returns, h, last_date)
+                results.append(MethodResult(
+                    method=method, label=label, color=color,
+                    forecast=None,
+                    metadata={
+                        "client_side":    True,
+                        "nbeats_features": out,
+                        "architecture":   f"N-BEATS: {3} blocks × FC({256})×{4} → backcast + forecast",
+                        "quantiles":      [0.05, 0.25, 0.50, 0.75, 0.95],
+                    },
+                ))
+                continue
             elif method == "garch":
-                out = forecast_garch(returns, h, np_, last_date)
+                raise ValueError("GARCH replaced by N-BEATS (Phase 2B). Use method='nbeats'.")
             elif method == "hmm":
                 out = forecast_hmm(returns, h, np_, last_date)
             elif method == "factor":
                 out = forecast_factor(returns, h, np_, last_date, req.ff5_decomposition)
             elif method == "var":
-                if asset_returns is None:
-                    raise ValueError("Asset prices unavailable for VAR")
-                out = forecast_var(asset_returns, weights_dict, h, np_, last_date)
+                # Phase 2D: VAR replaced by Gaussian Process autoregression.
+                out = forecast_gp(returns, h, last_date)
             elif method == "lstm":
                 # LSTM runs client-side in the browser via TF.js (Phase 1 upgrade).
                 # Server returns feature window + scaler params; no forecast band here.
