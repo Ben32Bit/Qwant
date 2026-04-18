@@ -1,15 +1,16 @@
 import asyncio
 import logging
-import anthropic
 from fastapi import APIRouter, HTTPException, Request
 from app.models.forecast import ForecastRequest, ForecastResponse
 from app.services.forecast_engine import run_all_forecasts
+from app.utils.rate_limit import limiter, FCST_LIMITS
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.post("/forecast", response_model=ForecastResponse)
+@limiter.limit(FCST_LIMITS)
 async def run_forecast(request: Request, body: ForecastRequest):
     """
     Run probabilistic 12-month portfolio forecasts using up to 6 methods.

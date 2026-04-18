@@ -16,6 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
+from app.utils.rate_limit import limiter, CMPT_LIMITS
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class RegimeRequest(BaseModel):
 
 
 @router.post("/regime/current")
+@limiter.limit(CMPT_LIMITS)
 async def get_current_regime(req: RegimeRequest, request: Request):
     """
     Detect current market regime from a portfolio equity curve.

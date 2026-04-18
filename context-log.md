@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-04-19 — Rate limiting hardened across all endpoints
+
+**What:** Every API endpoint now has per-IP rate limits to protect Anthropic token spend when sharing the app publicly.
+
+**Problem:** Only `/api/chat` and `/api/backtest` had limits (20/h and 60/h respectively). `/api/unified/chat`, `/api/screen/chat`, `/api/forecast`, `/api/screen/run`, `/api/screen/backtest`, and `/api/regime/current` had **zero** rate limiting — a bot could exhaust the Anthropic quota instantly.
+
+**Solution:** Consolidated into a single shared limiter (`app/utils/rate_limit.py`) with three tiers:
+
+| Tier | Endpoints | Default limit | Rationale |
+|------|-----------|--------------|-----------|
+| `AI_LIMITS` | `/chat`, `/unified/chat`, `/screen/chat` | **10/hour · 50/day** | Each call costs ~$0.003–0.01 in Anthropic tokens; 50/day ≈ $0.25–0.50 max per IP |
+| `FCST_LIMITS` | `/forecast` | **12/hour · 40/day** | 2 server calls per full forecast run (phase 1 + phase 2) → 6 full runs/hour |
+| `CMPT_LIMITS` | `/backtest`, `/screen/run`, `/screen/backtest`, `/regime/current` | **30/hour · 120/day** | No Anthropic cost, but CPU-intensive |
+| Global | All routes | **200/hour** | Safety net via `default_limits` on the Limiter |
+
+All limits are env-configurable (`AI_RATE_LIMIT`, `FORECAST_RATE_LIMIT`, `COMPUTE_RATE_LIMIT`, `GLOBAL_RATE_LIMIT`). slowapi sends `X-RateLimit-*` headers so the client can see remaining quota.
+
+**Files changed:**
+- `backend/app/utils/rate_limit.py` — new shared limiter module
+- `backend/app/main.py` — import shared limiter, remove stale `CHAT_RATE`/`BACKTEST_RATE` vars
+- `backend/app/routers/chat.py` — use shared limiter + AI_LIMITS
+- `backend/app/routers/backtest.py` — use shared limiter + CMPT_LIMITS (was 60/h, now 30/h + daily cap)
+- `backend/app/routers/unified.py` — add `Request` param + AI_LIMITS (was completely unprotected)
+- `backend/app/routers/screen.py` — add `Request` params + AI_LIMITS on /screen/chat, CMPT_LIMITS on /screen/run + /screen/backtest
+- `backend/app/routers/forecast.py` — add FCST_LIMITS (was completely unprotected)
+- `backend/app/routers/regime.py` — add CMPT_LIMITS (was completely unprotected)
+- `backend/.env.example` — document all four new env vars
+
+---
+
 ## 2026-04-19 — Forecast reliability fixes + method effectiveness UI (session 2)
 
 **Commits:** `40079cd`, `73e30a7`, `823457e`, `5c441de`, `3533d57`, `9ccfea6`

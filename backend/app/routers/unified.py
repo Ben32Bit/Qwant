@@ -1,16 +1,18 @@
 import asyncio
 import logging
 import anthropic
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from app.models.chat import ChatRequest
 from app.services.unified_ai import call_unified_ai
+from app.utils.rate_limit import limiter, AI_LIMITS
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.post("/unified/chat")
-async def unified_chat(chat_request: ChatRequest):
+@limiter.limit(AI_LIMITS)
+async def unified_chat(request: Request, chat_request: ChatRequest):
     """
     Single AI endpoint handling both portfolio construction and asset screening.
     Claude routes the request to the appropriate pipeline based on intent.
@@ -21,9 +23,6 @@ async def unified_chat(chat_request: ChatRequest):
         type = "clarification" → ai_response only (Claude asked a clarifying question)
     """
     try:
-        # call_unified_ai is synchronous (blocking Anthropic + yfinance calls).
-        # Run it in a thread pool so it doesn't stall the async event loop,
-        # which would cause Railway's proxy to return a non-JSON 502/504.
         result = await asyncio.to_thread(
             call_unified_ai,
             chat_request.message,

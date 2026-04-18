@@ -1,18 +1,16 @@
 import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Request
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from app.models.portfolio import PortfolioInput
 from app.models.backtest_result import BacktestResult
 from app.services.backtest_engine import run_full_backtest
 from app.services.data_service import fetch_prices
 from app.services.optimization import apply_strategy
+from app.utils.rate_limit import limiter, CMPT_LIMITS
 import os
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-limiter = Limiter(key_func=get_remote_address)
 RISK_FREE_RATE = float(os.getenv("RISK_FREE_RATE", "0.05"))
 
 
@@ -39,7 +37,7 @@ async def _run(portfolio: PortfolioInput) -> BacktestResult:
 
 
 @router.post("/backtest", response_model=BacktestResult)
-@limiter.limit("60/hour")
+@limiter.limit(CMPT_LIMITS)
 async def run_backtest(request: Request, portfolio: PortfolioInput) -> BacktestResult:
     """
     Direct backtest endpoint — bypasses AI.

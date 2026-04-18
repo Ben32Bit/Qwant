@@ -6,8 +6,7 @@ from datetime import date
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from dotenv import load_dotenv
 
@@ -23,16 +22,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Rate limiter (in-memory, per IP) ─────────────────────────────────────────
-# Uses slowapi — no Redis needed for single-instance deployment.
-# Switch storage_uri to "redis://..." when running multiple workers.
-CHAT_RATE    = os.getenv("CHAT_RATE_LIMIT",    "20/hour")
-BACKTEST_RATE = os.getenv("BACKTEST_RATE_LIMIT", "60/hour")
-
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=[],          # no global limit; set per-route
-    headers_enabled=True,       # sends X-RateLimit-* headers
-)
+# Shared singleton lives in app/utils/rate_limit.py.
+# All per-route limits are configured there via env vars:
+#   AI_RATE_LIMIT       (default "10/hour;50/day")
+#   FORECAST_RATE_LIMIT (default "12/hour;40/day")
+#   COMPUTE_RATE_LIMIT  (default "30/hour;120/day")
+#   GLOBAL_RATE_LIMIT   (default "200/hour")
+from app.utils.rate_limit import limiter
 
 
 # ── Warm universe ─────────────────────────────────────────────────────────────
@@ -104,10 +100,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Make limiter + rate strings available to routers via app.state
-app.state.chat_rate    = CHAT_RATE
-app.state.backtest_rate = BACKTEST_RATE
 
 # Routers
 app.include_router(chat.router,     prefix="/api")

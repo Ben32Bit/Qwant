@@ -1,22 +1,20 @@
 from fastapi import APIRouter, HTTPException, Request
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from app.models.chat import ChatRequest, ChatResponse, PortfolioResponse, DisplayConfig
 from app.services.ai_service import call_ai
 from app.services.backtest_engine import run_full_backtest
 from app.services.data_service import fetch_prices
 from app.services.optimization import apply_strategy
+from app.utils.rate_limit import limiter, AI_LIMITS
 import os
 
 router = APIRouter()
-limiter = Limiter(key_func=get_remote_address)
 RISK_FREE_RATE = float(os.getenv("RISK_FREE_RATE", "0.05"))
 
 _DEFAULT_SECTIONS = ["equity_curve", "drawdown", "metrics_summary", "weight_drift"]
 
 
 @router.post("/chat", response_model=ChatResponse)
-@limiter.limit("20/hour")
+@limiter.limit(AI_LIMITS)
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     try:
         # Step 1: Agentic AI loop — may call get_asset_statistics before constructing
