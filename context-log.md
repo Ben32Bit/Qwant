@@ -2,6 +2,23 @@
 
 ---
 
+## 2026-04-19 — Fix: rate limits too tight (10/hour blocked normal use)
+
+10/hour = one AI request every 6 minutes — fine for a strict bot block but
+unusable for friends testing portfolios. Raised to practical levels that still
+block automated scrapers:
+
+| Limit | Old | New |
+|-------|-----|-----|
+| AI endpoints | 10/hour | **30/hour** (~1 per 2 min) |
+| Forecast | 12/hour | **20/hour** (10 full runs) |
+| Compute | 30/hour | **60/hour** |
+| Global | 200/hour | **300/hour** |
+
+**Files:** `backend/app/utils/rate_limit.py`, `backend/.env.example`
+
+---
+
 ## 2026-04-19 — Fix: rate_limit.py startup crash (list vs string)
 
 **Root cause:** `os.getenv(...).split(";")` returned a Python list (`["10/hour", "50/day"]`). slowapi 0.1.9's `@limiter.limit()` decorator expects a plain string, not a list — it called string methods on the list at decoration time, raising `TypeError` before uvicorn could bind, so Railway's healthcheck at `/health` never got a response.
