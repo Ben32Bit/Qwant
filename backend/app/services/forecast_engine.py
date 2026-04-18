@@ -1025,6 +1025,8 @@ def run_all_forecasts(req) -> dict:
         except Exception as exc:
             logger.debug("TrendsProvider skipped: %s", exc)
 
+    _hmm_out_extras: dict = {}   # populated during HMM dispatch for regime/ensemble
+
     results = []
     for method in req.methods:
         label = METHOD_LABELS.get(method, method)
@@ -1074,6 +1076,17 @@ def run_all_forecasts(req) -> dict:
                     out["metadata"]["trends_context"] = _portfolio_trends(trends_ctx, weights)
                 if news_ctx and "metadata" in out:
                     out["metadata"]["news_article_count"] = news_ctx.get("portfolio_summary", {}).get("total_articles")
+                # 5A: compute 4-state regime after HMM (non-fatal)
+                try:
+                    from .meta_learner import compute_regime_probs, get_ensemble_weights
+                    vix_rank = macro_ctx.get("vix_pct_rank", 0.5) if macro_ctx else 0.5
+                    rp       = compute_regime_probs(out.get("metadata", {}), vix_rank)
+                    ew       = get_ensemble_weights(rp, req.methods)
+                    _hmm_out_extras["regime_probs"]     = rp
+                    _hmm_out_extras["ensemble_weights"] = ew
+                    logger.info("Regime: %s (dom=%s)", rp, rp.get("dominant"))
+                except Exception as exc:
+                    logger.debug("Regime classification failed: %s", exc)
             elif method == "factor":
                 out = forecast_factor(returns, h, np_, last_date, req.ff5_decomposition,
                                       macro_ctx or None)
@@ -1117,6 +1130,9 @@ def run_all_forecasts(req) -> dict:
         "news_available": bool(news_ctx.get("portfolio_summary", {}).get("available")),
     }
 
+    regime_probs     = _hmm_out_extras.get("regime_probs")
+    ensemble_weights = _hmm_out_extras.get("ensemble_weights")
+
     return ForecastResponse(
         forecast_start=forecast_dates[0] if forecast_dates else last_date,
         forecast_end=forecast_end,
@@ -1124,4 +1140,6 @@ def run_all_forecasts(req) -> dict:
         results=results,
         news_context=news_ctx or None,
         tier2_context=tier2_summary,
+        regime_probs=regime_probs,
+        ensemble_weights=ensemble_weights,
     )

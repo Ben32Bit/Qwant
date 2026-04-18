@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-04-19 — Phase 5: Regime-Conditional Meta-Learner (Stacked Generalization)
+
+**What:** Ensemble layer on top of the 6 base forecast models using regime-conditional weights.
+
+**New backend files:**
+- `backend/app/services/meta_learner.py` — `compute_regime_probs()` (4-state: 2-state HMM × VIX threshold), `get_ensemble_weights()` (Ang & Timmermann 2012 priors), `compute_disagreement()` (Krogh & Vedelsby 1995). Rule-based weights: bull_low_vol→Factor leads; bull_high_vol→XGBoost leads; bear→HMM leads; crisis→GP leads.
+- `backend/app/routers/regime.py` — POST /api/regime/current: runs HMM + VIX on equity curve, returns 4-state regime probs + ensemble weights.
+- `backend/scripts/train_meta_learner.py` — Offline training script: surrogate base model predictions → per-regime ElasticNetCV (purged walk-forward CV, embargo=21d) → ONNX export to `frontend/public/models/meta/{regime}.onnx`.
+
+**Updated backend files:**
+- `main.py` — registered regime router.
+- `forecast.py` model — added `regime_probs`, `ensemble_weights` fields to ForecastResponse.
+- `forecast_engine.py` — after HMM runs: calls `compute_regime_probs()` + `get_ensemble_weights()`, stores in `_hmm_out_extras`, returns at response level.
+
+**New frontend files:**
+- `frontend/src/ml/MetaEnsemble.js` — `computeDisagreement()`, `blendWeights()`, `blendBands()`, `computeEnsemble()`. ONNX per-regime models loaded if available (fallback to rule-based). Disagreement widens outer bands (high→+25% σ, med→+10% σ).
+- `frontend/src/components/Dashboard/EnsembleCard.jsx` — featured card above composite chart: ensemble fan chart (violet #c084fc), regime donut (SVG arc, 4 colors), disagreement badge, method weight bars. Cites Wolpert (1992), Ang & Timmermann (2012), Krogh & Vedelsby (1995), Lakshminarayanan et al. (2017).
+
+**Updated frontend files:**
+- `ForecastPanel.jsx` — imports EnsembleCard + MetaEnsemble; `useEffect` recomputes ensemble async when results/regime_probs change; EnsembleCard rendered above ForecastComposite.
+
+**Regime classification logic:**
+- bull_low_vol: HMM bull_prob fraction where vix_rank ≤ 0.60
+- bull_high_vol: remaining bull_prob fraction where vix_rank > 0.60 (linear ramp to 1.0 at 1.0)
+- bear: HMM bear_prob fraction where vix_rank ≤ 0.80
+- crisis: remaining bear_prob fraction where vix_rank > 0.80 (linear ramp)
+
+---
+
 ## 2026-04-18 — Phase 4: Tier 2 Data Providers + Client-Side FinBERT
 
 **What:** Added GDELT news, Reddit mention velocity, Google Trends, and browser-side FinBERT sentiment scoring.

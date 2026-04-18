@@ -3,6 +3,8 @@ import { useForecast } from '../../hooks/useForecast.js'
 import ForecastComposite from './ForecastComposite.jsx'
 import ForecastMethodCard from './ForecastMethodCard.jsx'
 import SentimentPanel from './SentimentPanel.jsx'
+import EnsembleCard from './EnsembleCard.jsx'
+import { computeEnsemble } from '../../ml/MetaEnsemble.js'
 
 const METHOD_ORDER = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
 
@@ -117,6 +119,22 @@ export default function ForecastPanel({ backtest, portfolio }) {
   const { results, meta, loading, error, run, hasData, newsContext, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef } =
     useForecast(backtest, portfolio)
 
+  const [ensemble, setEnsemble] = useState(null)
+
+  // Recompute ensemble whenever base model results or regime probs change
+  const regimeProbs   = meta?.regime_probs ?? null
+  const serverWeights = meta?.ensemble_weights ?? null
+
+  useEffect(() => {
+    const forecasted = results.filter(r => r.forecast?.p50?.length > 0)
+    if (!forecasted.length || !regimeProbs) { setEnsemble(null); return }
+    let cancelled = false
+    computeEnsemble(forecasted, regimeProbs, serverWeights)
+      .then(e => { if (!cancelled) setEnsemble(e) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [results, regimeProbs, serverWeights])
+
   const isRunning = loading.phase1 || loading.xgb || loading.nbeats || loading.phase2 || loading.lstm
 
   // Last historical portfolio value — anchor for projecting actual dollar values
@@ -194,6 +212,16 @@ export default function ForecastPanel({ backtest, portfolio }) {
               All methods cite peer-reviewed research and use strict walk-forward out-of-sample testing.
             </p>
           </div>
+        )}
+
+        {/* Ensemble forecast card — Phase 5F */}
+        {(hasData || isRunning) && (
+          <EnsembleCard
+            ensemble={ensemble}
+            regimeProbs={regimeProbs}
+            loading={isRunning && !ensemble}
+            lastValue={lastValue}
+          />
         )}
 
         {/* Composite chart — shows as soon as any result is available */}

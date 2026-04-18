@@ -49,3 +49,5 @@ class ForecastResponse(BaseModel):
     results: list[MethodResult]
     news_context: Optional[dict] = None    # per-ticker GDELT headlines for browser FinBERT
     tier2_context: Optional[dict] = None   # reddit + trends aggregate for method metadata
+    regime_probs: Optional[dict] = None    # 4-state regime probabilities for meta-ensemble
+    ensemble_weights: Optional[dict] = None  # regime-conditional method weights
