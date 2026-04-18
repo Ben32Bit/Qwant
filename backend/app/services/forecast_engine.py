@@ -851,6 +851,23 @@ def run_all_forecasts(req) -> dict:
     forecast_end   = forecast_dates[-1] if forecast_dates else last_date
     hist_end_val   = float(req.equity_curve[-1]["value"]) if req.equity_curve else 1.0
 
+    # ── Tier 1 data: insider trades (best-effort; failures are non-fatal) ────────
+    tickers = [a.ticker for a in req.assets] if req.assets else []
+    weights = {a.ticker: a.weight for a in req.assets} if req.assets else {}
+    insider = {}
+    if tickers:
+        try:
+            from .sec_provider import get_insider_features
+            insider = get_insider_features(tickers, weights, last_date)
+            if insider.get("available"):
+                logger.info(
+                    "SECProvider: portfolio net buying 30d = $%.1fM  (n=%d tickers)",
+                    insider["portfolio_net_buying_30d"],
+                    insider["n_tickers_with_data"],
+                )
+        except Exception as exc:
+            logger.debug("SECProvider skipped: %s", exc)
+
     results = []
     for method in req.methods:
         label = METHOD_LABELS.get(method, method)
@@ -866,9 +883,10 @@ def run_all_forecasts(req) -> dict:
                     metadata={
                         "client_side":    True,
                         "xgb_features":   out,
-                        "model":          "GradientBoostingRegressor (sklearn)",
+                        "model":          "HistGradientBoostingRegressor (sklearn)",
                         "quantiles":      [0.05, 0.25, 0.50, 0.75, 0.95],
                         "horizon_days":   21,
+                        "insider_context": insider,
                     },
                 ))
                 continue
@@ -893,6 +911,8 @@ def run_all_forecasts(req) -> dict:
                 out = forecast_hmm(returns, h, np_, last_date)
             elif method == "factor":
                 out = forecast_factor(returns, h, np_, last_date, req.ff5_decomposition)
+                if insider.get("available") and "metadata" in out:
+                    out["metadata"]["insider_context"] = insider
             elif method == "var":
                 # Phase 2D: VAR replaced by Gaussian Process autoregression.
                 out = forecast_gp(returns, h, last_date)

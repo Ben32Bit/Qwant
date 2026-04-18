@@ -26,7 +26,8 @@ const CITATIONS = {
     'Fama, E.F. & French, K.R. (2015). A five-factor asset pricing model. Journal of Financial Economics, 116(1), 1–22. https://doi.org/10.1016/j.jfineco.2014.10.010',
     'Carhart, M.M. (1997). On persistence in mutual fund performance. Journal of Finance, 52(1), 57–82. https://doi.org/10.1111/j.1540-6261.1997.tb03808.x',
     'Novy-Marx, R. (2013). The other side of value: The gross profitability premium. Journal of Financial Economics, 108(1), 1–28. https://doi.org/10.1016/j.jfineco.2013.01.003',
-    'Cochrane, J.H. (2011). Presidential address: Discount rates. Journal of Finance, 66(4), 1047–1108. https://doi.org/10.1111/j.1540-6261.2011.01671.x',
+    'Seyhun, H.N. (1986). Insiders\' profits, costs of trading, and market efficiency. Journal of Financial Economics, 16(2), 189–212. https://doi.org/10.1016/0304-405X(86)90060-7',
+    'Lakonishok, J. & Lee, I. (2001). Are insider trades informative? Review of Financial Studies, 14(1), 79–111. https://doi.org/10.1093/rfs/14.1.79',
   ],
   var: [
     'Rasmussen, C.E. & Williams, C.K.I. (2006). Gaussian Processes for Machine Learning. MIT Press. https://gaussianprocess.org/gpml/',
@@ -230,6 +231,15 @@ function getMetaItems(method, meta) {
         items.push({ label: '10Y-2Y', value: yieldCurve, warn: yieldRegime === 'inverted' })
       if (!mc.macro_available)
         items.push({ label: 'macro',  value: 'neutral', warn: true })
+      const ins = meta.insider_context
+      if (ins?.available) {
+        const netBuy = ins.portfolio_net_buying_30d
+        items.push({
+          label: 'insiders',
+          value: `${netBuy >= 0 ? '+' : ''}$${Math.abs(netBuy).toFixed(1)}M`,
+          warn: netBuy < -5,
+        })
+      }
       return items
     }
     case 'nbeats':
@@ -257,9 +267,23 @@ function getMetaItems(method, meta) {
         { label: 'model',    value: factorLabel, warn: meta.source === 'historical_fallback' },
       ]
       if (meta.mom_beta != null)
-        items.push({ label: 'Mom β', value: fmt(meta.mom_beta, 2) })
+        items.push({ label: 'Mom β',     value: fmt(meta.mom_beta, 2) })
       if (meta.rmw_beta != null)
         items.push({ label: 'Quality β', value: fmt(meta.rmw_beta, 2) })
+      const ins = meta.insider_context
+      if (ins?.available) {
+        const netBuy = ins.portfolio_net_buying_30d
+        items.push({
+          label: 'insiders 30d',
+          value: `${netBuy >= 0 ? '+' : ''}$${Math.abs(netBuy).toFixed(1)}M`,
+          warn:  netBuy < -5,
+        })
+        items.push({
+          label: 'buy ratio',
+          value: `${(ins.portfolio_buy_ratio_30d * 100).toFixed(0)}%`,
+          warn:  ins.portfolio_buy_ratio_30d < 0.3,
+        })
+      }
       return items
     }
     case 'var':
