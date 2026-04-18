@@ -1025,6 +1025,19 @@ def run_all_forecasts(req) -> dict:
         except Exception as exc:
             logger.debug("TrendsProvider skipped: %s", exc)
 
+    # ── EDGAR 10-K/10-Q filing excerpts (best-effort; non-fatal) ─────────────────
+    edgar_ctx: dict = {}
+    if tickers:
+        try:
+            from .edgar_filing_provider import get_edgar_filing_context
+            edgar_ctx = get_edgar_filing_context(tickers, weights, last_date)
+            logger.info(
+                "EDGARFiling: %d tickers with 10-K/10-Q excerpts",
+                edgar_ctx.get("tickers_with_data", 0),
+            )
+        except Exception as exc:
+            logger.debug("EDGARFiling skipped: %s", exc)
+
     _hmm_out_extras: dict = {}   # populated during HMM dispatch for regime/ensemble
 
     results = []
@@ -1139,6 +1152,7 @@ def run_all_forecasts(req) -> dict:
         historical_end_value=hist_end_val,
         results=results,
         news_context=news_ctx or None,
+        edgar_context=edgar_ctx or None,
         tier2_context=tier2_summary,
         regime_probs=regime_probs,
         ensemble_weights=ensemble_weights,

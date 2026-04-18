@@ -117,7 +117,7 @@ function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, 
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export default function ForecastPanel({ backtest, portfolio }) {
-  const { results, meta, loading, error, run, hasData, newsContext, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef } =
+  const { results, meta, loading, error, run, hasData, newsContext, edgarContext, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef } =
     useForecast(backtest, portfolio)
 
   const [ensemble, setEnsemble] = useState(null)
@@ -278,7 +278,7 @@ export default function ForecastPanel({ backtest, portfolio }) {
         )}
 
         {/* FinBERT sentiment — Phase 4B */}
-        {hasData && <SentimentPanel newsContext={newsContext} />}
+        {hasData && <SentimentPanel newsContext={newsContext} edgarContext={edgarContext} />}
 
         {/* OOS methodology footer */}
         {hasData && (
