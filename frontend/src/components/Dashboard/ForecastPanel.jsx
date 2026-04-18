@@ -6,6 +6,7 @@ import SentimentPanel from './SentimentPanel.jsx'
 import EnsembleCard from './EnsembleCard.jsx'
 import { computeEnsemble } from '../../ml/MetaEnsemble.js'
 import KellyPanel from './KellyPanel.jsx'
+import ScenarioPanel from './ScenarioPanel.jsx'
 
 const METHOD_ORDER = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
 
@@ -231,6 +232,15 @@ export default function ForecastPanel({ backtest, portfolio }) {
             ensemble={ensemble}
             regimeProbs={regimeProbs}
             loading={isRunning && !ensemble}
+          />
+        )}
+
+        {/* Scenario stress tester */}
+        {(hasData || isRunning) && (
+          <ScenarioPanel
+            ensemble={ensemble}
+            regimeProbs={regimeProbs}
+            results={results}
           />
         )}
 
