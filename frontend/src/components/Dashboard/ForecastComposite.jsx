@@ -72,37 +72,110 @@ function MethodStatusDots({ results }) {
   )
 }
 
-// ── Ensemble weight strip ─────────────────────────────────────────────────────
+// ── Method effectiveness + ensemble weights ───────────────────────────────────
 
-function EnsembleWeights({ ensemble }) {
-  if (!ensemble?.weights) return null
-  const methods = Object.entries(ensemble.weights)
-    .sort((a, b) => b[1] - a[1])
-    .filter(([, w]) => w > 0.01)
+// Extract a quality signal (0–1) from whatever OOS metric a method exposes.
+function methodQuality(result) {
+  const m = result?.metadata
+  if (!m) return null
+  if (m.oos_r2  != null) return Math.max(0, Math.min(1, (m.oos_r2 + 0.2) / 1.2))   // XGBoost
+  if (m.oos_mse != null) return Math.max(0, 1 - Math.min(1, m.oos_mse * 5))         // LSTM
+  if (m.regime_sanity != null) return m.regime_sanity ? 0.80 : 0.45                  // HMM
+  if (m.ljung_box_ok  != null) return m.ljung_box_ok  ? 0.75 : 0.40                  // VAR/GP
+  if (m.periods != null) return 0.70                                                  // N-BEATS heuristic
+  if (m.factor_r2 != null) return Math.max(0, Math.min(1, m.factor_r2))              // Factor
+  return null
+}
+
+function qualityLabel(q) {
+  if (q == null) return null
+  if (q >= 0.75) return { label: 'HIGH', color: 'var(--accent-green)' }
+  if (q >= 0.50) return { label: 'MED',  color: '#ffd43b' }
+  return          { label: 'LOW',  color: '#ff4757' }
+}
+
+function MethodEffectivenessTable({ results, ensemble }) {
+  const weights = ensemble?.weights ?? {}
+  const rows = METHOD_ORDER
+    .map(method => {
+      const r = (results ?? []).find(x => x.method === method)
+      const w = weights[method] ?? null
+      const q = methodQuality(r)
+      const ql = qualityLabel(q)
+      const p50end = r?.forecast?.p50?.at(-1)
+      return { method, r, w, q, ql, p50end }
+    })
+    .filter(row => row.r || row.w != null)
+
+  if (!rows.length) return null
 
   return (
-    <div className="flex items-center gap-2 mt-2">
-      <span className="mono flex-shrink-0" style={{ fontSize: 9, color: 'var(--text-secondary)' }}>Ensemble:</span>
-      <div className="flex flex-1 rounded overflow-hidden" style={{ height: 8 }}>
-        {methods.map(([method, weight]) => (
-          <div
-            key={method}
-            title={`${METHOD_LABELS[method] ?? method}: ${(weight * 100).toFixed(0)}%`}
-            style={{
-              width: `${weight * 100}%`,
-              background: METHOD_COLORS[method] ?? '#888',
-              transition: 'width 0.5s ease',
-            }}
-          />
-        ))}
+    <div className="mt-3 rounded-lg overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+      <div className="grid" style={{ gridTemplateColumns: '1fr 120px 64px 72px', background: 'rgba(255,255,255,0.02)' }}>
+        <div className="mono px-3 py-1.5" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>METHOD</div>
+        <div className="mono px-3 py-1.5" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>ENSEMBLE WEIGHT</div>
+        <div className="mono px-3 py-1.5 text-center" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>OOS FIT</div>
+        <div className="mono px-3 py-1.5 text-right" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>12M MEDIAN</div>
       </div>
-      <div className="flex gap-2 flex-shrink-0">
-        {methods.slice(0, 3).map(([method, weight]) => (
-          <span key={method} className="mono" style={{ fontSize: 9, color: METHOD_COLORS[method] ?? '#888' }}>
-            {METHOD_LABELS[method] ?? method} {(weight * 100).toFixed(0)}%
+      {rows.map(({ method, r, w, ql, p50end }) => {
+        const color = METHOD_COLORS[method]
+        const done  = r?.forecast != null
+        const err   = r?.error
+        return (
+          <div key={method} className="grid items-center"
+            style={{ gridTemplateColumns: '1fr 120px 64px 72px', borderTop: '1px solid var(--border)', opacity: (!done && !err) ? 0.45 : 1 }}>
+            {/* Method name + dot */}
+            <div className="flex items-center gap-2 px-3 py-2">
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: err ? '#ff4757' : done ? color : 'var(--border)', display: 'inline-block', flexShrink: 0, boxShadow: done ? `0 0 5px ${color}88` : 'none' }} />
+              <span className="mono font-bold" style={{ fontSize: 10, color: done ? color : 'var(--text-secondary)' }}>
+                {METHOD_LABELS[method]}
+              </span>
+              {err && <span className="mono" style={{ fontSize: 8, color: '#ff4757' }}>error</span>}
+              {!done && !err && <span className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)' }}>waiting…</span>}
+            </div>
+            {/* Ensemble weight bar */}
+            <div className="px-3 py-2">
+              {w != null ? (
+                <div className="flex items-center gap-1.5">
+                  <div className="flex-1 rounded-full overflow-hidden" style={{ height: 4, background: 'var(--border)' }}>
+                    <div style={{ width: `${w * 100}%`, height: '100%', background: color, borderRadius: 9999, transition: 'width 0.5s ease' }} />
+                  </div>
+                  <span className="mono font-bold flex-shrink-0" style={{ fontSize: 9, color, minWidth: 26, textAlign: 'right' }}>
+                    {(w * 100).toFixed(0)}%
+                  </span>
+                </div>
+              ) : (
+                <span className="mono" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.4 }}>—</span>
+              )}
+            </div>
+            {/* OOS quality */}
+            <div className="px-3 py-2 text-center">
+              {ql ? (
+                <span className="mono font-bold" style={{ fontSize: 9, color: ql.color }}>{ql.label}</span>
+              ) : (
+                <span className="mono" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.4 }}>—</span>
+              )}
+            </div>
+            {/* 12-month p50 endpoint */}
+            <div className="px-3 py-2 text-right">
+              {p50end != null ? (
+                <span className="mono font-bold" style={{ fontSize: 9, color }}>
+                  {p50end >= 0 ? '+' : ''}{p50end.toFixed(1)}%
+                </span>
+              ) : (
+                <span className="mono" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.4 }}>—</span>
+              )}
+            </div>
+          </div>
+        )
+      })}
+      {Object.keys(weights).length > 0 && (
+        <div className="px-3 py-1.5 flex items-center gap-1" style={{ borderTop: '1px solid var(--border)', background: 'rgba(74,158,255,0.04)' }}>
+          <span className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)', opacity: 0.6 }}>
+            Weights: regime-conditional stacked ensemble (Wolpert 1992) · current regime drives allocation
           </span>
-        ))}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -175,17 +248,17 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
               · projected portfolio value · next 12 months
             </span>
           </h3>
-          {activeResults.length === 6 && (
-            <span className="mono text-xs px-2 py-0.5 rounded"
-              style={{ background: 'rgba(0,212,170,0.1)', border: '1px solid rgba(0,212,170,0.3)', color: 'var(--accent-green)' }}>
-              all 6 ready
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            <MethodStatusDots results={results} />
+            {activeResults.length === 6 && (
+              <span className="mono text-xs px-2 py-0.5 rounded"
+                style={{ background: 'rgba(0,212,170,0.1)', border: '1px solid rgba(0,212,170,0.3)', color: 'var(--accent-green)' }}>
+                all 6 ✓
+              </span>
+            )}
+          </div>
         </div>
-        <div className="mt-2">
-          <MethodStatusDots results={results} />
-        </div>
-        <EnsembleWeights ensemble={ensemble} />
+        <MethodEffectivenessTable results={results} ensemble={ensemble} />
       </div>
 
       <ResponsiveContainer width="100%" height={240}>

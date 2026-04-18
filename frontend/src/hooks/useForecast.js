@@ -6,18 +6,42 @@ const PHASE2_METHODS = ['hmm', 'var', 'lstm']   // lstm returns features, not fo
 /**
  * Two-phase + client-ML forecast fetcher.
  *
- * Phase 1  (server, ~1-3s):   xgboost (features), garch, factor
+ * Phase 1  (server, ~1-3s):   xgboost (features), nbeats (features), factor
  * Phase 1B (browser, ~1-3s):  XGBoost ONNX Runtime Web · N-BEATS pure-JS weights
- * Phase 2  (server, ~5-15s):  hmm, var + lstm feature window
+ * Phase 2  (server, ~5-15s):  hmm, var + lstm feature window (25s timeout)
  * Phase 3  (browser, ~2-5s):  Attention-LSTM MC Dropout via TF.js
- *
- * XGBoost replaces Monte Carlo GBM (Phase 2A upgrade).
- * LSTM replaced server-side tensorflow-cpu (Phase 1 upgrade).
- * Both run client-side to stay within Railway 512MB free-tier RAM.
+ *                              Falls back to client-derived seed window if phase 2 fails.
  */
+
+// Derive LSTM seed features directly from the equity curve when the server
+// doesn't return them (phase 2 timeout or error).
+function deriveLstmFeatures(equityCurve) {
+  if (!equityCurve || equityCurve.length < 30) return null
+  const returns = []
+  for (let i = 1; i < equityCurve.length; i++) {
+    returns.push((equityCurve[i].value / equityCurve[i - 1].value) - 1)
+  }
+  const win = returns.slice(-60)
+  const min = Math.min(...win)
+  const max = Math.max(...win)
+  const scaled = win.map(r => (max === min) ? 0 : (r - min) / (max - min))
+
+  const lastDate = new Date(equityCurve.at(-1).date)
+  const forecastDates = []
+  const d = new Date(lastDate)
+  while (forecastDates.length < 252) {
+    d.setDate(d.getDate() + 1)
+    if (d.getDay() !== 0 && d.getDay() !== 6) {
+      forecastDates.push(d.toISOString().slice(0, 10))
+    }
+  }
+  return { last_window: scaled, forecast_dates: forecastDates, scaler_min: min, scaler_max: max }
+}
+
 export function useForecast(backtest, portfolio) {
   const [phase1, setPhase1]     = useState(null)
   const [phase2, setPhase2]     = useState(null)
+  const [lstmStandalone, setLstmStandalone] = useState(null)  // LSTM result when phase2 failed
   const [newsContext, setNewsContext]   = useState(null)
   const [edgarContext, setEdgarContext] = useState(null)
   const [loading, setLoading] = useState({ phase1: false, xgb: false, nbeats: false, phase2: false, lstm: false })
@@ -33,6 +57,7 @@ export function useForecast(backtest, portfolio) {
     if (!backtest?.equity_curve) return
     setPhase1(null)
     setPhase2(null)
+    setLstmStandalone(null)
     setNewsContext(null)
     setEdgarContext(null)
     setError(null)
@@ -149,7 +174,6 @@ export function useForecast(backtest, portfolio) {
         )
       }
 
-      // Run XGBoost (ONNX) and N-BEATS (pure-JS) in parallel
       await Promise.all(inferTasks)
     }
 
@@ -159,7 +183,7 @@ export function useForecast(backtest, portfolio) {
     let p2Data = null
     try {
       const p2Controller = new AbortController()
-      const p2Timeout    = setTimeout(() => p2Controller.abort(), 90_000)  // 90s hard timeout
+      const p2Timeout    = setTimeout(() => p2Controller.abort(), 25_000)  // 25s hard timeout
       try {
         const res = await fetch('/api/forecast', {
           method:  'POST',
@@ -176,7 +200,7 @@ export function useForecast(backtest, portfolio) {
       }
     } catch (e) {
       if (e.name === 'AbortError') {
-        console.warn('Forecast phase 2 timed out after 90s — HMM/GP skipped')
+        console.warn('Forecast phase 2 timed out after 25s — HMM/GP skipped, LSTM will use client features')
       } else {
         console.warn('Forecast phase 2 error:', e.message)
       }
@@ -185,59 +209,79 @@ export function useForecast(backtest, portfolio) {
     }
 
     // ── Phase 3: client-side Attention-LSTM (browser TF.js) ───────────────
-    if (!p2Data) return
-    const lstmServerResult = p2Data.results?.find(
+    // Use server-provided LSTM features when available; fall back to deriving
+    // the seed window directly from the equity curve so LSTM always runs.
+    const lstmServerResult = p2Data?.results?.find(
       r => r.method === 'lstm' && r.metadata?.client_side === true
     )
-    if (!lstmServerResult) return
+    const lstmFeatures = lstmServerResult?.metadata?.lstm_features
+      ?? deriveLstmFeatures(backtest.equity_curve)
+
+    if (!lstmFeatures) return
 
     lstmStart.current = Date.now()
     setLoading(l => ({ ...l, lstm: true }))
     try {
       const { inferLSTM } = await import('../ml/LSTMInferer.js')
-      const { lstm_features } = lstmServerResult.metadata
       const band = await inferLSTM({
-        seedWindow:    lstm_features.last_window,
-        forecastDates: lstm_features.forecast_dates,
-        scalerMin:     lstm_features.scaler_min,
-        scalerMax:     lstm_features.scaler_max,
+        seedWindow:    lstmFeatures.last_window,
+        forecastDates: lstmFeatures.forecast_dates,
+        scalerMin:     lstmFeatures.scaler_min,
+        scalerMax:     lstmFeatures.scaler_max,
       })
       const lstmMs = Date.now() - (lstmStart.current ?? Date.now())
       setTiming(t => ({ ...t, lstmMs }))
 
-      setPhase2(p2 => {
-        if (!p2) return p2
-        return {
-          ...p2,
-          results: p2.results.map(r => r.method !== 'lstm' ? r : {
-            ...r,
-            forecast:   band,
-            compute_ms: lstmMs,
-            metadata: {
-              architecture:   r.metadata.architecture,
-              attention:      r.metadata.attention,
-              dropout_passes: 200,
-              client_side:    false,
-            },
-          }),
-        }
-      })
+      if (p2Data) {
+        // Phase 2 succeeded — update LSTM entry inside phase2 state
+        setPhase2(p2 => {
+          if (!p2) return p2
+          return {
+            ...p2,
+            results: p2.results.map(r => r.method !== 'lstm' ? r : {
+              ...r,
+              forecast:   band,
+              compute_ms: lstmMs,
+              metadata: {
+                architecture:   r.metadata.architecture,
+                attention:      r.metadata.attention,
+                dropout_passes: 200,
+                client_side:    false,
+              },
+            }),
+          }
+        })
+      } else {
+        // Phase 2 failed — store LSTM as standalone result
+        setLstmStandalone({
+          method:     'lstm',
+          label:      'Attention-LSTM',
+          color:      '#ff4757',
+          forecast:   band,
+          compute_ms: lstmMs,
+          metadata:   { dropout_passes: 200, client_only: true, client_side: false },
+        })
+      }
     } catch (e) {
-      setPhase2(p2 => {
-        if (!p2) return p2
-        return {
-          ...p2,
-          results: p2.results.map(r =>
-            r.method !== 'lstm' ? r : { ...r, error: e.message }
-          ),
-        }
-      })
+      if (p2Data) {
+        setPhase2(p2 => {
+          if (!p2) return p2
+          return {
+            ...p2,
+            results: p2.results.map(r =>
+              r.method !== 'lstm' ? r : { ...r, error: e.message }
+            ),
+          }
+        })
+      } else {
+        setLstmStandalone({ method: 'lstm', label: 'Attention-LSTM', color: '#ff4757', error: e.message })
+      }
     } finally {
       setLoading(l => ({ ...l, lstm: false }))
     }
   }, [backtest, portfolio])
 
-  const allResults = mergeResults(phase1, phase2)
+  const allResults = mergeResults(phase1, phase2, lstmStandalone)
 
   return {
     results:         allResults,
@@ -257,7 +301,7 @@ export function useForecast(backtest, portfolio) {
   }
 }
 
-function mergeResults(phase1, phase2) {
+function mergeResults(phase1, phase2, lstmStandalone) {
   if (!phase1) return []
   const map = {}
   for (const r of (phase1.results ?? [])) map[r.method] = r
@@ -265,6 +309,7 @@ function mergeResults(phase1, phase2) {
     if (r.method === 'lstm' && r.metadata?.client_side === true) continue
     map[r.method] = r
   }
+  if (lstmStandalone) map['lstm'] = lstmStandalone
   const order = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
   return order.map(m => map[m]).filter(Boolean)
 }

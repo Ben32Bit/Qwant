@@ -16,7 +16,7 @@ import { computeMetricsFromCurves, computeDrawdownFromCurve } from '../../utils/
 const RISK_FREE_RATE = 0.05
 
 // ── Backtest ETA bar ──────────────────────────────────────────────────────────
-const BACKTEST_EST_MS = 12_000
+const BACKTEST_EST_MS = 40_000
 
 function BacktestEtaBar({ loading, startRef }) {
   const [elapsed, setElapsed] = useState(0)
