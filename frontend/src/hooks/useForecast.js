@@ -158,17 +158,28 @@ export function useForecast(backtest, portfolio) {
     setLoading(l => ({ ...l, phase2: true }))
     let p2Data = null
     try {
-      const res = await fetch('/api/forecast', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ ...body, methods: PHASE2_METHODS }),
-      })
-      if (!res.ok) throw new Error(`Forecast phase 2 failed: ${res.status}`)
-      p2Data = await res.json()
-      setPhase2(p2Data)
-      setTiming(t => ({ ...t, phase2Ms: Date.now() - (p2Start.current ?? Date.now()) }))
+      const p2Controller = new AbortController()
+      const p2Timeout    = setTimeout(() => p2Controller.abort(), 90_000)  // 90s hard timeout
+      try {
+        const res = await fetch('/api/forecast', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ ...body, methods: PHASE2_METHODS }),
+          signal:  p2Controller.signal,
+        })
+        if (!res.ok) throw new Error(`Forecast phase 2 failed: ${res.status}`)
+        p2Data = await res.json()
+        setPhase2(p2Data)
+        setTiming(t => ({ ...t, phase2Ms: Date.now() - (p2Start.current ?? Date.now()) }))
+      } finally {
+        clearTimeout(p2Timeout)
+      }
     } catch (e) {
-      console.warn('Forecast phase 2 error:', e.message)
+      if (e.name === 'AbortError') {
+        console.warn('Forecast phase 2 timed out after 90s — HMM/GP skipped')
+      } else {
+        console.warn('Forecast phase 2 error:', e.message)
+      }
     } finally {
       setLoading(l => ({ ...l, phase2: false }))
     }

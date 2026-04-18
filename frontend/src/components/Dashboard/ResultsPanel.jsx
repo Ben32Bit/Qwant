@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react'
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import EquityCurve from './EquityCurve.jsx'
 import RotationEquityChart from './RotationEquityChart.jsx'
 import DrawdownChart from './DrawdownChart.jsx'
@@ -14,6 +14,59 @@ import { exportToExcel } from '../../utils/exportExcel.js'
 import { computeMetricsFromCurves, computeDrawdownFromCurve } from '../../utils/computeMetrics.js'
 
 const RISK_FREE_RATE = 0.05
+
+// ── Backtest ETA bar ──────────────────────────────────────────────────────────
+const BACKTEST_EST_MS = 12_000
+
+function BacktestEtaBar({ loading, startRef }) {
+  const [elapsed, setElapsed] = useState(0)
+
+  useEffect(() => {
+    if (!loading) { setElapsed(0); return }
+    const tick = () => setElapsed(Date.now() - (startRef.current ?? Date.now()))
+    tick()
+    const id = setInterval(tick, 250)
+    return () => clearInterval(id)
+  }, [loading, startRef])
+
+  if (!loading) return null
+
+  const overrun   = elapsed > BACKTEST_EST_MS
+  const progress  = overrun ? 0.97 : elapsed / BACKTEST_EST_MS
+  const etaMs     = Math.max(0, BACKTEST_EST_MS - elapsed)
+  const overrunMs = overrun ? elapsed - BACKTEST_EST_MS : 0
+  const color     = overrun ? '#ffd43b' : 'var(--accent-blue)'
+
+  const fmtEta = () =>
+    overrun        ? `+${Math.ceil(overrunMs / 1_000)}s — still running`
+    : etaMs >= 60_000 ? `~${Math.ceil(etaMs / 60_000)}m`
+    : `~${Math.ceil(etaMs / 1_000)}s`
+
+  return (
+    <div className="rounded-lg border px-4 py-3"
+      style={{ borderColor: `${color}33`, background: `${color}0a` }}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="mono text-xs" style={{ color }}>
+          {overrun ? '⚠' : '⟳'} AI analysis · portfolio construction · backtest computation
+        </span>
+        <span className="mono text-xs font-bold" style={{ color }}>
+          {overrun ? fmtEta() : `ETA ${fmtEta()}`}
+        </span>
+      </div>
+      <div className="rounded-full overflow-hidden" style={{ height: 4, background: 'var(--border)' }}>
+        <div className="h-full rounded-full"
+          style={{
+            width: `${progress * 100}%`,
+            background: overrun
+              ? 'linear-gradient(90deg, #ffd43b, #ff6b35)'
+              : 'linear-gradient(90deg, var(--accent-blue), #00d4aa)',
+            transition: overrun ? 'none' : 'width 0.25s linear',
+          }}
+        />
+      </div>
+    </div>
+  )
+}
 
 // ── Featured metrics strip ────────────────────────────────────────────────────
 const METRIC_LABELS = {
@@ -101,6 +154,12 @@ function EmptyState() {
 // ── Main panel ────────────────────────────────────────────────────────────────
 export default function ResultsPanel({ backtest, portfolio, displayConfig, loading }) {
   const isEmpty = !backtest && !loading
+
+  // ── Loading start tracker (for ETA bar) ──────────────────────────────────
+  const loadingStartRef = useRef(null)
+  useEffect(() => {
+    if (loading) { loadingStartRef.current = Date.now() }
+  }, [loading])
 
   // ── Range slider state ────────────────────────────────────────────────────
   const [rangeStart, setRangeStart] = useState(null)
@@ -214,6 +273,9 @@ export default function ResultsPanel({ backtest, portfolio, displayConfig, loadi
             </button>
           )}
         </div>
+
+        {/* Backtest ETA bar */}
+        <BacktestEtaBar loading={loading} startRef={loadingStartRef} />
 
         {/* AI Narrative */}
         {displayConfig?.narrative && <AiNarrative narrative={displayConfig.narrative} />}

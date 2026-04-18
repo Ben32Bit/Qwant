@@ -77,26 +77,31 @@ function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, 
     : activePhase === 'nbeats' ? NBEATS_EST_MS
     : activePhase === 'p2'     ? PHASE2_EST_MS
     : LSTM_EST_MS
-  const progress = Math.min(elapsed / estMs, 0.97)
-  const etaMs    = Math.max(0, estMs - elapsed)
+  const overrun   = elapsed > estMs
+  const progress  = overrun ? 0.97 : elapsed / estMs
+  const etaMs     = Math.max(0, estMs - elapsed)
+  const overrunMs = overrun ? elapsed - estMs : 0
 
-  const fmtEta = ms => ms >= 60_000 ? `~${Math.ceil(ms / 60_000)}m` : `~${Math.ceil(ms / 1_000)}s`
+  const fmtEta = (ms, over) =>
+    over   ? `+${Math.ceil(overrunMs / 1_000)}s — still running`
+    : ms >= 60_000 ? `~${Math.ceil(ms / 60_000)}m`
+    : `~${Math.ceil(ms / 1_000)}s`
 
   const isBrowser = activePhase !== 'p1' && activePhase !== 'p2'
-  const color = isBrowser ? 'var(--accent-green)' : 'var(--accent-blue)'
+  const color     = overrun ? '#ffd43b' : isBrowser ? 'var(--accent-green)' : 'var(--accent-blue)'
 
   const LABELS = {
     p1:     'Phase 1 (server): XGBoost features · N-BEATS features · Factor Model',
     xgb:    'Phase 1B (browser): XGBoost · 5 quantile ONNX models',
     nbeats: 'Phase 1B (browser): N-BEATS · 12-period recursive · pure-JS weights',
-    p2:     'Phase 2 (server): Hidden Markov Model · VAR',
+    p2:     'Phase 2 (server): Hidden Markov Model · Gaussian Process',
     lstm:   'Phase 3 (browser): Attention-LSTM · TF.js MC Dropout',
   }
   const GRADIENTS = {
     p1:     'linear-gradient(90deg, var(--accent-blue), #00d4aa)',
     xgb:    'linear-gradient(90deg, #4a9eff, #00d4aa)',
     nbeats: 'linear-gradient(90deg, #ffd43b, #00d4aa)',
-    p2:     'linear-gradient(90deg, var(--accent-blue), #a855f7)',
+    p2:     overrun ? 'linear-gradient(90deg, #ffd43b, #ff6b35)' : 'linear-gradient(90deg, var(--accent-blue), #a855f7)',
     lstm:   'linear-gradient(90deg, #ff4757, #a855f7)',
   }
 
@@ -104,12 +109,16 @@ function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, 
     <div className="rounded-lg border px-4 py-3"
       style={{ borderColor: `${color}33`, background: `${color}0a` }}>
       <div className="flex items-center justify-between mb-2">
-        <span className="mono text-xs" style={{ color }}>⟳ {LABELS[activePhase]}</span>
-        <span className="mono text-xs font-bold" style={{ color }}>ETA {fmtEta(etaMs)}</span>
+        <span className="mono text-xs" style={{ color }}>
+          {overrun ? '⚠' : '⟳'} {LABELS[activePhase]}
+        </span>
+        <span className="mono text-xs font-bold" style={{ color }}>
+          {overrun ? fmtEta(0, true) : `ETA ${fmtEta(etaMs, false)}`}
+        </span>
       </div>
       <div className="rounded-full overflow-hidden" style={{ height: 4, background: 'var(--border)' }}>
         <div className="h-full rounded-full"
-          style={{ width: `${progress * 100}%`, background: GRADIENTS[activePhase], transition: 'width 0.25s linear' }}
+          style={{ width: `${progress * 100}%`, background: GRADIENTS[activePhase], transition: overrun ? 'none' : 'width 0.25s linear' }}
         />
       </div>
     </div>
