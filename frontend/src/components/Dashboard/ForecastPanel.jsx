@@ -216,7 +216,52 @@ export default function ForecastPanel({ backtest, portfolio }) {
           </div>
         )}
 
-        {/* Ensemble forecast card — Phase 5F */}
+        {/* ── Primary forecast content ─────────────────────────────────────── */}
+
+        {/* Composite chart — all 6 method medians on one chart */}
+        {(hasData || loading.phase1) && (
+          <ForecastComposite
+            results={results}
+            equityCurve={backtest?.equity_curve}
+            forecastStart={meta?.forecast_start}
+            loading={loading.phase1}
+          />
+        )}
+
+        {/* 2×3 individual method cards */}
+        {(hasData || isRunning) && (
+          <div className="grid grid-cols-2 gap-4">
+            {METHOD_ORDER.map(method => {
+              const result   = resultMap[method]
+              const inPhase1 = PHASE1_METHODS.has(method)
+              const inPhase2 = PHASE2_METHODS.has(method)
+
+              const isXgbBrowserLoading    = method === 'xgboost' && loading.xgb
+              const isNbeatsBrowserLoading = method === 'nbeats'  && loading.nbeats
+              const isLstmBrowserLoading   = method === 'lstm'    && loading.lstm
+
+              if (!result && ((inPhase1 && loading.phase1) || (inPhase2 && loading.phase2))) {
+                return <LoadingCard key={method} method={method} />
+              }
+              if (isXgbBrowserLoading || isNbeatsBrowserLoading || isLstmBrowserLoading) {
+                return <LoadingCard key={method} method={method} browserCompute />
+              }
+              if (!result) return null
+              return (
+                <ForecastMethodCard
+                  key={method}
+                  result={result}
+                  loading={inPhase2 && loading.phase2 && !result.forecast}
+                  lastValue={lastValue}
+                />
+              )
+            })}
+          </div>
+        )}
+
+        {/* ── Meta-analysis (shows once ensemble is ready) ─────────────────── */}
+
+        {/* Ensemble forecast card */}
         {(hasData || isRunning) && (
           <EnsembleCard
             ensemble={ensemble}
@@ -242,49 +287,6 @@ export default function ForecastPanel({ backtest, portfolio }) {
             regimeProbs={regimeProbs}
             results={results}
           />
-        )}
-
-        {/* Composite chart — shows as soon as any result is available */}
-        {(hasData || loading.phase1) && (
-          <ForecastComposite
-            results={results}
-            equityCurve={backtest?.equity_curve}
-            forecastStart={meta?.forecast_start}
-            loading={loading.phase1}
-          />
-        )}
-
-        {/* 2×3 method card grid */}
-        {(hasData || isRunning) && (
-          <div className="grid grid-cols-2 gap-4">
-            {METHOD_ORDER.map(method => {
-              const result   = resultMap[method]
-              const inPhase1 = PHASE1_METHODS.has(method)
-              const inPhase2 = PHASE2_METHODS.has(method)
-
-              const isXgbBrowserLoading    = method === 'xgboost' && loading.xgb
-              const isNbeatsBrowserLoading = method === 'nbeats'  && loading.nbeats
-              const isLstmBrowserLoading   = method === 'lstm'    && loading.lstm
-
-              // Show skeleton during server phases
-              if (!result && ((inPhase1 && loading.phase1) || (inPhase2 && loading.phase2))) {
-                return <LoadingCard key={method} method={method} />
-              }
-              // Show browser-compute card during ONNX/TF.js inference
-              if (isXgbBrowserLoading || isNbeatsBrowserLoading || isLstmBrowserLoading) {
-                return <LoadingCard key={method} method={method} browserCompute />
-              }
-              if (!result) return null
-              return (
-                <ForecastMethodCard
-                  key={method}
-                  result={result}
-                  loading={inPhase2 && loading.phase2 && !result.forecast}
-                  lastValue={lastValue}
-                />
-              )
-            })}
-          </div>
         )}
 
         {/* FinBERT sentiment — Phase 4B */}

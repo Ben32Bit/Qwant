@@ -5,7 +5,7 @@ import {
 } from 'recharts'
 import { AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE } from '../../utils/chartConfig.js'
 
-const METHOD_ORDER = ['monte_carlo', 'garch', 'factor', 'hmm', 'var', 'lstm']
+const METHOD_ORDER = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
 
 function fmtVal(v) {
   if (v == null) return '—'
