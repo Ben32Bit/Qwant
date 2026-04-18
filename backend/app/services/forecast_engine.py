@@ -382,6 +382,7 @@ def forecast_hmm(
     horizon: int,
     n_paths: int,
     last_date: str,
+    macro_context: Optional[dict] = None,
 ) -> dict:
     """
     2-state Gaussian HMM (Bull/Bear) with regime-conditional simulation.
@@ -475,20 +476,59 @@ def forecast_hmm(
 
     dates = _forecast_dates(last_date, horizon)
     band  = _paths_to_band(paths, dates)
+
+    meta: dict = {
+        "bull_state_mu_ann":    round(float(means[bull]) * TRADING_DAYS, 4),
+        "bull_state_vol_ann":   round(float(stds[bull]) * np.sqrt(TRADING_DAYS), 4),
+        "bear_state_mu_ann":    round(float(means[bear]) * TRADING_DAYS, 4),
+        "bear_state_vol_ann":   round(float(stds[bear]) * np.sqrt(TRADING_DAYS), 4),
+        "current_bull_prob":    round(bull_prob, 3),
+        "current_state":        "bull" if current_state == bull else "bear",
+        "transition_bull_bull": round(float(A[bull, bull]), 3),
+        "transition_bear_bear": round(float(A[bear, bear]), 3),
+        "oos_sanity_ok":        oos_sane,
+        "train_n":              n_train,
+    }
+
+    if macro_context:
+        yc       = macro_context.get("yield_curve_10y2y", 0.6)
+        yc_rank  = macro_context.get("yield_curve_pct_rank", 0.5)
+        vix_rank = macro_context.get("vix_pct_rank", 0.5)
+        cr_rank  = macro_context.get("credit_pct_rank", 0.5)
+
+        if yc < 0:
+            yield_regime = "inverted"
+        elif yc_rank < 0.25:
+            yield_regime = "flat"
+        elif yc_rank > 0.75:
+            yield_regime = "steep"
+        else:
+            yield_regime = "normal"
+
+        if vix_rank > 0.80:
+            vix_regime = "elevated"
+        elif vix_rank > 0.60:
+            vix_regime = "above_avg"
+        else:
+            vix_regime = "calm"
+
+        if yield_regime == "inverted" or cr_rank > 0.80:
+            macro_env = "restrictive"
+        elif yield_regime in ("steep", "normal") and vix_regime == "calm" and cr_rank < 0.50:
+            macro_env = "expansionary"
+        else:
+            macro_env = "neutral"
+
+        meta["macro_env"]          = macro_env
+        meta["yield_curve_regime"] = yield_regime
+        meta["vix_regime"]         = vix_regime
+        meta["yield_curve_10y2y"]  = round(yc, 3)
+        meta["vix_pct_rank"]       = round(vix_rank, 3)
+        meta["credit_pct_rank"]    = round(cr_rank, 3)
+
     return {
         "band": band,
-        "metadata": {
-            "bull_state_mu_ann":    round(float(means[bull]) * TRADING_DAYS, 4),
-            "bull_state_vol_ann":   round(float(stds[bull]) * np.sqrt(TRADING_DAYS), 4),
-            "bear_state_mu_ann":    round(float(means[bear]) * TRADING_DAYS, 4),
-            "bear_state_vol_ann":   round(float(stds[bear]) * np.sqrt(TRADING_DAYS), 4),
-            "current_bull_prob":    round(bull_prob, 3),
-            "current_state":        "bull" if current_state == bull else "bear",
-            "transition_bull_bull": round(float(A[bull, bull]), 3),
-            "transition_bear_bear": round(float(A[bear, bear]), 3),
-            "oos_sanity_ok":        oos_sane,
-            "train_n":              n_train,
-        },
+        "metadata": meta,
         "compute_ms": int((time.time() - t0) * 1000),
     }
 
@@ -501,6 +541,7 @@ def forecast_factor(
     n_paths: int,
     last_date: str,
     ff5: Optional[dict],
+    macro_context: Optional[dict] = None,
 ) -> dict:
     """
     Factor-anchored GBM: replaces the naive historical mean with a
@@ -544,14 +585,39 @@ def forecast_factor(
 
     # If FF5 decomposition available, use its loadings; else fall back to
     # naive historical mean (flagged in metadata)
+    # Macro cycle adjustment: inverted yield curve or wide credit spreads
+    # suppress the equity risk premium (Campbell & Cochrane 1999; Ludvigson & Ng 2009).
+    # Only mkt_rf is scaled — idiosyncratic factor premia are cycle-independent.
+    cycle_scale      = 1.0
+    macro_adjustment = None
+    if macro_context:
+        yc_rank = macro_context.get("yield_curve_pct_rank", 0.5)
+        cr_rank = macro_context.get("credit_pct_rank", 0.5)
+        if yc_rank < 0.15:
+            cycle_scale *= 0.70
+        elif yc_rank < 0.30:
+            cycle_scale *= 0.85
+        if cr_rank > 0.85:
+            cycle_scale *= 0.75
+        elif cr_rank > 0.70:
+            cycle_scale *= 0.87
+        if cycle_scale != 1.0:
+            macro_adjustment = {
+                "cycle_scale":      round(cycle_scale, 3),
+                "yc_pct_rank":      round(yc_rank, 3),
+                "credit_pct_rank":  round(cr_rank, 3),
+                "yield_curve_10y2y": round(macro_context.get("yield_curve_10y2y", 0.6), 3),
+            }
+
     if ff5 and all(k in ff5 for k in ("mkt_rf", "smb", "hml", "rmw", "cma", "alpha")):
         # Sum all factor contributions — includes Momentum (mom) if the
         # decomposition was run via Ken French path (Phase 2C upgrade).
         # RMW is the quality/profitability factor (Novy-Marx 2013).
         mu_ann = 0.05  # risk-free anchor
         for factor, premium in FACTOR_PREMIA.items():
-            beta = ff5.get(factor, 0.0)
-            mu_ann += beta * premium
+            beta  = ff5.get(factor, 0.0)
+            scale = cycle_scale if factor == "mkt_rf" else 1.0
+            mu_ann += beta * premium * scale
         mu_ann += ff5.get("alpha", 0.0)
 
         total_vol = float(returns.std() * np.sqrt(TRADING_DAYS))
@@ -577,15 +643,16 @@ def forecast_factor(
     return {
         "band": band,
         "metadata": {
-            "mu_factor_ann":  round(mu_ann, 4),
-            "mu_hist_ann":    round(float(returns.mean() * TRADING_DAYS), 4),
-            "idio_vol_ann":   round(idio_vol, 4),
-            "r_squared":      round(ff5.get("r_squared", 0.0) if ff5 else 0.0, 3),
-            "source":         source,
-            "n_factors":      len(ff5.get("factors_used", ["mkt_rf","smb","hml","rmw","cma"])) if ff5 else 1,
-            "mom_beta":       round(ff5.get("mom", 0.0), 3) if ff5 else None,
-            "rmw_beta":       round(ff5.get("rmw", 0.0), 3) if ff5 else None,
-            "factor_premia":  FACTOR_PREMIA,
+            "mu_factor_ann":    round(mu_ann, 4),
+            "mu_hist_ann":      round(float(returns.mean() * TRADING_DAYS), 4),
+            "idio_vol_ann":     round(idio_vol, 4),
+            "r_squared":        round(ff5.get("r_squared", 0.0) if ff5 else 0.0, 3),
+            "source":           source,
+            "n_factors":        len(ff5.get("factors_used", ["mkt_rf","smb","hml","rmw","cma"])) if ff5 else 1,
+            "mom_beta":         round(ff5.get("mom", 0.0), 3) if ff5 else None,
+            "rmw_beta":         round(ff5.get("rmw", 0.0), 3) if ff5 else None,
+            "factor_premia":    FACTOR_PREMIA,
+            "macro_adjustment": macro_adjustment,
         },
         "compute_ms": int((time.time() - t0) * 1000),
     }
@@ -851,6 +918,23 @@ def run_all_forecasts(req) -> dict:
     forecast_end   = forecast_dates[-1] if forecast_dates else last_date
     hist_end_val   = float(req.equity_curve[-1]["value"]) if req.equity_curve else 1.0
 
+    # ── Tier 1 data: macro + VIX (best-effort; failures are non-fatal) ──────────
+    macro_ctx: dict = {}
+    try:
+        from .fred_provider import get_macro_features
+        from .vix_provider  import get_vix_features
+        macro_ctx = {**get_macro_features(last_date), **get_vix_features(last_date)}
+        logger.info(
+            "Macro context: YC=%.2f (pct=%.2f) VIX_rank=%.2f credit_pct=%.2f src=%s",
+            macro_ctx.get("yield_curve_10y2y", 0),
+            macro_ctx.get("yield_curve_pct_rank", 0),
+            macro_ctx.get("vix_pct_rank", 0),
+            macro_ctx.get("credit_pct_rank", 0),
+            macro_ctx.get("source", "?"),
+        )
+    except Exception as exc:
+        logger.debug("Macro context skipped: %s", exc)
+
     # ── Tier 1 data: insider trades (best-effort; failures are non-fatal) ────────
     tickers = [a.ticker for a in req.assets] if req.assets else []
     weights = {a.ticker: a.weight for a in req.assets} if req.assets else {}
@@ -902,20 +986,26 @@ def run_all_forecasts(req) -> dict:
                         "nbeats_features": out,
                         "architecture":   f"N-BEATS: {3} blocks × FC({256})×{4} → backcast + forecast",
                         "quantiles":      [0.05, 0.25, 0.50, 0.75, 0.95],
+                        "macro_context":  macro_ctx or None,
                     },
                 ))
                 continue
             elif method == "garch":
                 raise ValueError("GARCH replaced by N-BEATS (Phase 2B). Use method='nbeats'.")
             elif method == "hmm":
-                out = forecast_hmm(returns, h, np_, last_date)
+                out = forecast_hmm(returns, h, np_, last_date, macro_ctx or None)
             elif method == "factor":
-                out = forecast_factor(returns, h, np_, last_date, req.ff5_decomposition)
+                out = forecast_factor(returns, h, np_, last_date, req.ff5_decomposition,
+                                      macro_ctx or None)
                 if insider.get("available") and "metadata" in out:
                     out["metadata"]["insider_context"] = insider
             elif method == "var":
                 # Phase 2D: VAR replaced by Gaussian Process autoregression.
                 out = forecast_gp(returns, h, last_date)
+                if macro_ctx and "metadata" in out:
+                    out["metadata"]["vix_pct_rank"]      = macro_ctx.get("vix_pct_rank")
+                    out["metadata"]["vix_term_slope"]    = macro_ctx.get("vix_term_slope")
+                    out["metadata"]["yield_curve_10y2y"] = macro_ctx.get("yield_curve_10y2y")
             elif method == "lstm":
                 # LSTM runs client-side in the browser via TF.js (Phase 1 upgrade).
                 # Server returns feature window + scaler params; no forecast band here.

@@ -242,20 +242,35 @@ function getMetaItems(method, meta) {
       }
       return items
     }
-    case 'nbeats':
-      return [
+    case 'nbeats': {
+      const mc = meta.macro_context ?? {}
+      const items = [
         { label: 'periods',   value: meta.periods ?? 12 },
         { label: 'vol 21d',   value: fmtPct(meta.vol_21d_ann) },
         { label: 'ret 21d',   value: meta.ret_21d != null ? `${(meta.ret_21d * 100).toFixed(1)}%` : '—' },
         { label: 'n obs',     value: meta.n_obs },
       ]
-    case 'hmm':
-      return [
+      if (mc.vix_pct_rank != null)
+        items.push({ label: 'VIX rank',  value: `${(mc.vix_pct_rank * 100).toFixed(0)}%`, warn: mc.vix_pct_rank > 0.75 })
+      if (mc.yield_curve_10y2y != null)
+        items.push({ label: '10Y-2Y',    value: `${mc.yield_curve_10y2y?.toFixed(2)}%`, warn: mc.yield_curve_10y2y < 0 })
+      return items
+    }
+    case 'hmm': {
+      const items = [
         { label: 'P(bull)',   value: `${(meta.current_bull_prob * 100).toFixed(0)}%` },
         { label: 'state',     value: meta.current_state, warn: meta.current_state === 'bear' },
         { label: 'bull μ',    value: fmtPct(meta.bull_state_mu_ann) },
         { label: 'bear μ',    value: fmtPct(meta.bear_state_mu_ann) },
       ]
+      if (meta.macro_env)
+        items.push({ label: 'macro',    value: meta.macro_env, warn: meta.macro_env === 'restrictive' })
+      if (meta.yield_curve_regime)
+        items.push({ label: 'YC rgm',  value: meta.yield_curve_regime, warn: meta.yield_curve_regime === 'inverted' })
+      if (meta.vix_regime)
+        items.push({ label: 'VIX rgm', value: meta.vix_regime, warn: meta.vix_regime === 'elevated' })
+      return items
+    }
     case 'factor': {
       const factorLabel = meta.source === 'historical_fallback' ? 'hist'
         : meta.source === 'ff6' ? 'FF5+Mom'
@@ -270,6 +285,11 @@ function getMetaItems(method, meta) {
         items.push({ label: 'Mom β',     value: fmt(meta.mom_beta, 2) })
       if (meta.rmw_beta != null)
         items.push({ label: 'Quality β', value: fmt(meta.rmw_beta, 2) })
+      if (meta.macro_adjustment) {
+        const adj = meta.macro_adjustment
+        items.push({ label: 'mkt scale', value: `${(adj.cycle_scale * 100).toFixed(0)}%`, warn: adj.cycle_scale < 0.85 })
+        items.push({ label: '10Y-2Y',    value: `${adj.yield_curve_10y2y?.toFixed(2)}%`,  warn: adj.yield_curve_10y2y < 0 })
+      }
       const ins = meta.insider_context
       if (ins?.available) {
         const netBuy = ins.portfolio_net_buying_30d
@@ -286,13 +306,21 @@ function getMetaItems(method, meta) {
       }
       return items
     }
-    case 'var':
-      return [
+    case 'var': {
+      const items = [
         { label: 'OOS R²',   value: meta.oos_r2 != null ? fmt(meta.oos_r2, 3) : '—' },
         { label: 'NLPD',     value: meta.nlpd    != null ? fmt(meta.nlpd, 3)   : '—' },
         { label: 'lookback', value: `${meta.lookback ?? 7}d` },
         { label: 'kernel',   value: 'Matérn ν=5/2' },
       ]
+      if (meta.vix_pct_rank != null)
+        items.push({ label: 'VIX rank',  value: `${(meta.vix_pct_rank * 100).toFixed(0)}%`, warn: meta.vix_pct_rank > 0.80 })
+      if (meta.vix_term_slope != null)
+        items.push({ label: 'VIX slope', value: fmt(meta.vix_term_slope, 2), warn: meta.vix_term_slope < 0 })
+      if (meta.yield_curve_10y2y != null)
+        items.push({ label: '10Y-2Y',    value: `${meta.yield_curve_10y2y?.toFixed(2)}%`, warn: meta.yield_curve_10y2y < 0 })
+      return items
+    }
     case 'lstm':
       return [
         { label: 'engine',    value: meta.client_side === false ? 'TF.js browser' : 'browser' },

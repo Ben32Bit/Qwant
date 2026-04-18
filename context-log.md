@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-04-18 — Phase 3E: Route Tier 1 Data to HMM, Factor, GP, N-BEATS
+
+**What:** Macro/VIX context now flows to all forecast methods, not just XGBoost.
+
+**Changes to `forecast_engine.py`:**
+- `run_all_forecasts()`: fetches `get_macro_features()` + `get_vix_features()` once (merged into `macro_ctx` dict), before the existing insider fetch.
+- `forecast_hmm()`: new `macro_context` param → annotates metadata with `macro_env` (expansionary/neutral/restrictive), `yield_curve_regime` (inverted/flat/normal/steep), `vix_regime` (calm/above_avg/elevated).
+- `forecast_factor()`: new `macro_context` param → computes `cycle_scale` multiplier on `mkt_rf` premium only (yield curve pct_rank < 0.15 → ×0.70; credit pct_rank > 0.85 → ×0.75). Stored in `macro_adjustment` metadata.
+- GP (`var`): macro VIX rank, term slope, and yield curve added to metadata.
+- N-BEATS: `macro_context` dict passed through in metadata for client-side display.
+
+**Changes to `ForecastMethodCard.jsx`:**
+- HMM strip: shows `macro` (env), `YC rgm`, `VIX rgm` with warns.
+- Factor strip: shows `mkt scale` (cycle_scale%) and `10Y-2Y` when macro_adjustment present.
+- GP strip: shows `VIX rank`, `VIX slope`, `10Y-2Y`.
+- N-BEATS strip: shows `VIX rank`, `10Y-2Y`.
+
+**Academic basis for cycle_scale:**
+- Campbell & Cochrane (1999): equity risk premium is counter-cyclical.
+- Ludvigson & Ng (2009): macro factors predict equity risk premia.
+
+---
+
 ## 2026-04-18 — Phase 3: Tier 1 Data Provider Layer (FRED + VIX → XGBoost 14 features)
 
 **What:** Added live macro/VIX data providers and expanded XGBoost from 9 to 14 features.
