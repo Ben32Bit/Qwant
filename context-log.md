@@ -2,6 +2,80 @@
 
 ---
 
+## 2026-04-19 — Forecast reliability fixes + method effectiveness UI (session 2)
+
+**Commits:** `40079cd`, `73e30a7`, `823457e`, `5c441de`, `3533d57`, `9ccfea6`
+
+### Fix: LSTM always runs regardless of phase 2 outcome (`40079cd`)
+- Root cause: `if (!p2Data) return` in `useForecast.js` meant LSTM was silently skipped whenever phase 2 timed out or errored.
+- Fix: Added `deriveLstmFeatures(equityCurve)` helper that builds the seed window (last 60 scaled daily returns), scaler min/max, and 252 business-day forecast dates from the equity curve directly.
+- LSTM now always runs after phase 2 — using server features when available, client-derived features as fallback.
+- Added `lstmStandalone` state: when `p2Data` is null, LSTM result stored separately and merged into `allResults` via updated `mergeResults(phase1, phase2, lstmStandalone)`.
+- Phase 2 timeout reduced from 90s → 25s (HMM/GP should complete in <15s; longer means Railway is struggling).
+- **Files:** `frontend/src/hooks/useForecast.js`
+
+### Feature: Method effectiveness table in composite chart (`40079cd`)
+- Replaced the simple ensemble weight strip (colored bar) with `MethodEffectivenessTable`.
+- Shows all 6 methods in a grid: colored dot + name, ensemble weight % with animated bar, OOS quality badge (HIGH/MED/LOW derived from whichever metric the method exposes: `oos_r2` for XGBoost, `oos_mse` for LSTM, `regime_sanity` for HMM, `ljung_box_ok` for GP/VAR), 12-month p50 median return endpoint.
+- Footer note cites Wolpert (1992) stacked generalisation.
+- **Files:** `frontend/src/components/Dashboard/ForecastComposite.jsx`
+
+### Fix: Results tab ETA bar estimate (`73e30a7`, `40079cd`)
+- `BacktestEtaBar` estimate raised 12s → 40s (AI + backtest pipeline regularly takes 20–35s).
+- **Files:** `frontend/src/components/Dashboard/ResultsPanel.jsx`
+
+### Fix: ETA bar stuck at "~0s" when overrunning (`73e30a7`)
+- When `elapsed > estMs`, `etaMs = 0` caused the bar to freeze at "~0s".
+- Fixed by detecting overrun and switching to amber `⚠ +Xs — still running` display + amber/orange gradient on the progress bar.
+- Added `BacktestEtaBar` to `ResultsPanel` (tracks `loading` prop with `loadingStartRef`, 40s estimate, overrun state).
+- **Files:** `frontend/src/components/Dashboard/ForecastPanel.jsx`, `frontend/src/components/Dashboard/ResultsPanel.jsx`
+
+### Fix: Composite chart showing only N-BEATS (`5c441de`)
+- `METHOD_ORDER` in `ForecastComposite` was `['monte_carlo', 'garch', ...]` — stale names from a previous engine version. No XGBoost or Factor lines were ever rendered.
+- Fixed to `['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']`.
+- Also reordered `ForecastPanel`: composite chart + 6 method cards first (primary outputs), then EnsembleCard / KellyPanel / ScenarioPanel / SentimentPanel (meta-analysis).
+- **Files:** `frontend/src/components/Dashboard/ForecastComposite.jsx`, `frontend/src/components/Dashboard/ForecastPanel.jsx`
+
+### Feature: Phase 8 — Macro scenario stress tester (`3533d57`)
+- `ScenarioPanel.jsx`: 6 macro scenarios (Current / Soft Landing / Rate Spike / Mild Recession / Severe Crisis / Stagflation) each with calibrated regime probability distributions (Ang & Timmermann 2012).
+- Per-scenario shows: regime distribution pips, ensemble weight bars vs current baseline delta, Kelly capital deployment vs baseline.
+- Pure client-side via `MetaEnsemble.blendWeights` + `KellyCalculator`.
+- **Files:** `frontend/src/components/Dashboard/ScenarioPanel.jsx`, `frontend/src/components/Dashboard/ForecastPanel.jsx`
+
+### Feature: Forecast architecture dropdown + status dots + weight strip (`823457e`)
+- `ForecastArchitecture.jsx`: collapsible 8-layer pipeline diagram (data ingestion → 6 models → regime → meta-ensemble → outputs). Defaults collapsed.
+- `ForecastComposite`: per-method status dots (glowing when done, dimmed waiting, red error), ensemble weight color bar.
+- **Files:** `frontend/src/components/Dashboard/ForecastArchitecture.jsx`, `frontend/src/components/Dashboard/ForecastComposite.jsx`, `frontend/src/components/Dashboard/ForecastPanel.jsx`
+
+### Fix: Vercel build — `f*/2` in JSDoc closed block comment (`9ccfea6`)
+- `*/` inside a `/** ... */` block comment terminates the comment, breaking Rollup parse.
+- Fixed `KellyCalculator.js` line 10: `Half-Kelly (f*/2)` → `Half-Kelly (f* divided by 2)`.
+
+---
+
+## 2026-04-19 — Phase 5–7 + build fixes (session 1)
+
+**Commits:** `96654e8`, `9db545d`, `9ebf4b6`, `a7264bf`
+
+### Phase 7: EDGAR 10-K/10-Q filing sentiment (`96654e8`)
+- `backend/app/services/edgar_filing_provider.py`: fetches CIK from `company_tickers.json`, uses EDGAR EFTS full-text search for highlighted risk-factor / forward-looking excerpts. Fallback: submissions API + 300KB-capped primary document + regex Item 1A/7 extraction. Top-5 holdings by |weight|, ETFs skipped, 24h cache.
+- `backend/app/models/forecast.py`: added `edgar_context: Optional[dict]` to `ForecastResponse`.
+- `backend/app/services/forecast_engine.py`: fetches EDGAR context, attaches to phase 1 response.
+- `frontend/src/hooks/useForecast.js`: expose `edgarContext` state from `p1Data.edgar_context`.
+- `frontend/src/components/Dashboard/SentimentPanel.jsx`: rewritten with two tabs — News Headlines (GDELT/FinBERT existing flow) and SEC Filings (EDGAR excerpts, sentence-split before FinBERT, filing type/date/company cards).
+
+### Phase 6: Kelly position sizing (`9db545d`)
+- `frontend/src/ml/KellyCalculator.js`: `f* = μ/σ²` from ensemble 90% CI; `σ` from `(p95−p5)/(2×1.645)`; regime confidence multiplier (crisis 0.50, bear 0.70, bull_high_vol 0.85, bull_low_vol 1.00); half/full Kelly toggle; clipped to [0, 2].
+- `frontend/src/components/Dashboard/KellyPanel.jsx`: SVG arc gauge, deployment bar, stat grid.
+
+### Fix: Vercel build — `onnxruntime-web` WASM dynamic import (`9ebf4b6`)
+- Vite 6 Rollup cannot bundle WASM from dynamic imports. Fix: load from CDN in `index.html` as `window.ort`; externalize in `vite.config.js`; `XGBoostInferer.js` and `MetaEnsemble.js` use `window.ort` instead of `await import()`.
+
+### Phase 5: Regime-conditional meta-learner (`a7264bf`)
+- See entry below for full detail.
+
+---
+
 ## 2026-04-19 — Phase 5: Regime-Conditional Meta-Learner (Stacked Generalization)
 
 **What:** Ensemble layer on top of the 6 base forecast models using regime-conditional weights.
