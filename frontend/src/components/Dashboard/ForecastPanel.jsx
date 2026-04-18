@@ -5,6 +5,7 @@ import ForecastMethodCard from './ForecastMethodCard.jsx'
 import SentimentPanel from './SentimentPanel.jsx'
 import EnsembleCard from './EnsembleCard.jsx'
 import { computeEnsemble } from '../../ml/MetaEnsemble.js'
+import KellyPanel from './KellyPanel.jsx'
 
 const METHOD_ORDER = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
 
@@ -221,6 +222,15 @@ export default function ForecastPanel({ backtest, portfolio }) {
             regimeProbs={regimeProbs}
             loading={isRunning && !ensemble}
             lastValue={lastValue}
+          />
+        )}
+
+        {/* Kelly position sizing */}
+        {(hasData || isRunning) && (
+          <KellyPanel
+            ensemble={ensemble}
+            regimeProbs={regimeProbs}
+            loading={isRunning && !ensemble}
           />
         )}
 
