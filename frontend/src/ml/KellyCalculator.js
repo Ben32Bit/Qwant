@@ -7,7 +7,7 @@
  *   We estimate μ from the ensemble p50 at the 1-year horizon and σ from the
  *   90% confidence interval: σ ≈ (p95 − p5) / (2 × 1.645).
  *
- *   Half-Kelly (f*/2) is the standard practical recommendation: it gives 75% of
+ *   Half-Kelly (f* divided by 2) is the standard practical recommendation: it gives 75% of
  *   the long-run growth rate with far lower drawdown risk.
  *
  *   Regime adjustment: scales fraction by a confidence multiplier derived from the
