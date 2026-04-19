@@ -1,59 +1,108 @@
 /**
  * LSTMInferer.js — Browser-side Attention-LSTM inference via TensorFlow.js
  *
- * Loads the pre-trained model from /models/lstm/model.json (served by Vercel
- * as a static asset) and runs 200 MC Dropout passes to produce Bayesian
- * uncertainty fan bands (p5/p25/p50/p75/p95).
+ * PATCHED: correct feature rollout (Priority 5 fix).
+ * The previous version only updated feature[0] with the model's *output*
+ * scalar and left features[1..4] (vol_21d, mom_5d, mom_21d, rsi_14) frozen
+ * at historical values for the entire 252-day horizon. That produced
+ * mathematically invalid forecasts after day 1.
  *
- * The server prepares the scaled 60-day feature window and MinMaxScaler
- * parameters; this module handles inference only.
- *
- * MC Dropout inference: model.apply(x, { training: true }) keeps Dropout
- * layers active at test time — each pass samples a different dropout mask,
- * giving a distribution of predictions that represents model uncertainty.
- *
- * Vectorised: all 200 passes run as a single batch at each horizon step,
- * so the total inference cost is 252 model.apply() calls (not 200×252).
- *
- * References
- * ----------
- * Gal, Y. & Ghahramani, Z. (2016). Dropout as a Bayesian approximation.
- *   Proceedings of ICML 33, 1050–1059.
- *   https://proceedings.mlr.press/v48/gal16.html
- *
- * CS230 Stanford (2020). Predicting Stock Market Returns Using Temporal
- *   Attention-Enhanced LSTM. Winter 2020 Project Reports.
- *   https://cs230.stanford.edu/projects_winter_2020/reports/32066186.pdf
- *
- * Bahdanau, D., Cho, K., & Bengio, Y. (2015). Neural machine translation
- *   by jointly learning to align and translate. ICLR 2015.
- *   https://arxiv.org/abs/1409.0473
+ * The corrected rollout maintains a buffer of the most recent scaled
+ * returns, rebuilds all 5 features each step by mirroring the server's
+ * prepare_lstm_features formulas, and re-scales them with the same
+ * MinMaxScaler the server fit.
  */
 
-const MODEL_URL      = '/models/lstm/model.json'
-const N_MC_PASSES    = 200
-const MODEL_NOT_FOUND = `Attention-LSTM model not found. Run: cd backend && python scripts/train_lstm.py`
+const MODEL_URL       = '/models/lstm/model.json'
+const N_MC_PASSES     = 200
+const MODEL_NOT_FOUND = `Attention-LSTM model not found at ${MODEL_URL}. Run: cd backend && python scripts/train_lstm.py`
+const TRADING_DAYS    = 252
 
-let _model = null      // cached after first load
-let _tf    = null      // tf module cached after dynamic import
+// Feature order must match server's prepare_lstm_features exactly:
+//   [r, vol_21d, mom_5d, mom_21d, rsi_14]
+const F_RET = 0, F_VOL = 1, F_MOM5 = 2, F_MOM21 = 3, F_RSI = 4
 
-/** Lazily import TF.js and load the model on first use. */
+let _model = null
+let _tf    = null
+
 async function getModel() {
   if (_model) return _model
-
   if (!_tf) {
     _tf = await import('@tensorflow/tfjs')
-    // Use WebGL backend for GPU acceleration if available; falls back to CPU
     await _tf.ready()
   }
-
   try {
     _model = await _tf.loadLayersModel(MODEL_URL)
   } catch (err) {
     throw new Error(MODEL_NOT_FOUND)
   }
-
   return _model
+}
+
+// ── Feature recomputation helpers (inverse then forward of server's scaler) ──
+
+function unscale(scaledVal, minArr, maxArr, idx) {
+  // feature_range=(-1, 1):  scaled = 2 * (x - min) / (max - min) - 1
+  // inverse:                x = (scaled + 1) * (max - min) / 2 + min
+  return (scaledVal + 1) * (maxArr[idx] - minArr[idx]) / 2 + minArr[idx]
+}
+
+function scale(rawVal, minArr, maxArr, idx) {
+  const range = maxArr[idx] - minArr[idx]
+  if (range === 0) return 0
+  return 2 * (rawVal - minArr[idx]) / range - 1
+}
+
+/**
+ * Rebuild all 5 scaled features for a new time step, given a buffer of
+ * recent *raw* (unscaled) returns.
+ *
+ * Mirrors backend/app/services/forecast_engine.py::prepare_lstm_features.
+ * The buffer must contain AT LEAST the last 21 raw returns so we can compute
+ * vol_21d and mom_21d. RSI-14 needs 15+ for the diff-based rolling mean.
+ */
+function buildScaledFeatureRow(rawReturns, minArr, maxArr) {
+  const n = rawReturns.length
+  if (n < 21) {
+    throw new Error(`LSTM rollout needs ≥21 raw returns in buffer, got ${n}`)
+  }
+
+  const last = rawReturns[n - 1]
+
+  // vol_21d (annualised std of last 21 returns)
+  let mean = 0
+  for (let i = n - 21; i < n; i++) mean += rawReturns[i]
+  mean /= 21
+  let ssq = 0
+  for (let i = n - 21; i < n; i++) {
+    const d = rawReturns[i] - mean
+    ssq += d * d
+  }
+  const vol21 = Math.sqrt(ssq / 21) * Math.sqrt(TRADING_DAYS)
+
+  // mom_5d, mom_21d (cumulative sum — matches server's rolling(N).sum())
+  let mom5 = 0, mom21 = 0
+  for (let i = n - 5;  i < n; i++) mom5  += rawReturns[i]
+  for (let i = n - 21; i < n; i++) mom21 += rawReturns[i]
+
+  // RSI-14: rolling mean of gains vs losses over last 14 diffs
+  const diffs = []
+  for (let i = n - 14; i < n; i++) diffs.push(rawReturns[i] - rawReturns[i - 1])
+  let gain = 0, loss = 0
+  for (const d of diffs) {
+    if (d > 0) gain += d
+    else       loss -= d
+  }
+  gain /= 14; loss /= 14
+  const rsi14 = gain / (gain + loss + 1e-9)
+
+  return [
+    scale(last,   minArr, maxArr, F_RET),
+    scale(vol21,  minArr, maxArr, F_VOL),
+    scale(mom5,   minArr, maxArr, F_MOM5),
+    scale(mom21,  minArr, maxArr, F_MOM21),
+    scale(rsi14,  minArr, maxArr, F_RSI),
+  ]
 }
 
 /**
@@ -62,34 +111,55 @@ async function getModel() {
  * @param {Object} params
  * @param {number[][]}  params.seedWindow    — (60 × 5) scaled feature window from server
  * @param {string[]}    params.forecastDates — business-day dates for the horizon
- * @param {number[]}    params.scalerMin     — MinMaxScaler data_min_ per feature
- * @param {number[]}    params.scalerMax     — MinMaxScaler data_max_ per feature
- * @param {number}      [params.nPasses=200] — MC Dropout passes
- * @returns {Promise<{dates, p5, p25, p50, p75, p95}>} — cumulative % returns
+ * @param {number[]}    params.scalerMin     — 5 MinMaxScaler data_min_ values (one per feature)
+ * @param {number[]}    params.scalerMax     — 5 MinMaxScaler data_max_ values (one per feature)
+ * @param {number[]}    [params.rawReturnSeed] — last 22+ raw returns from the portfolio
+ * @param {number}      [params.nPasses=200]
  */
 export async function inferLSTM({
   seedWindow,
   forecastDates,
   scalerMin,
   scalerMax,
+  rawReturnSeed = null,
   nPasses = N_MC_PASSES,
 }) {
+  // ── Input contract validation ───────────────────────────────────────────────
+  if (!Array.isArray(seedWindow) || !seedWindow.length)
+    throw new Error('inferLSTM: seedWindow must be a non-empty array')
+  if (!Array.isArray(seedWindow[0]))
+    throw new Error(
+      `inferLSTM: seedWindow must be 2D (lookback × features); got 1D. ` +
+      `LSTM requires the full 5-feature window from the server.`
+    )
+  if (!Array.isArray(scalerMin) || scalerMin.length !== seedWindow[0].length)
+    throw new Error(
+      `inferLSTM: scalerMin must be an array of ${seedWindow[0].length} elements (one per feature); ` +
+      `got ${Array.isArray(scalerMin) ? `length ${scalerMin.length}` : typeof scalerMin}`
+    )
+  if (!Array.isArray(scalerMax) || scalerMax.length !== seedWindow[0].length)
+    throw new Error(`inferLSTM: scalerMax array length must match feature count`)
+
   const tf      = _tf ?? await import('@tensorflow/tfjs')
   const model   = await getModel()
   const horizon = forecastDates.length
-  const lookback = seedWindow.length
+  const lookback  = seedWindow.length
   const nFeatures = seedWindow[0].length
 
-  // Initialise: nPasses copies of the seed window + cumulative returns
-  // windows[pass] = (lookback × nFeatures) float array (flat for tensor creation)
+  // Seed the raw return buffer from rawReturnSeed if provided, else unscale from window
+  const seedRaw = rawReturnSeed && rawReturnSeed.length >= 22
+    ? rawReturnSeed.slice(-Math.max(lookback, 22))
+    : seedWindow.map(row => unscale(row[F_RET], scalerMin, scalerMax, F_RET))
+
+  // Per-pass state: each pass gets its own diverging window + return buffer
   let windows = Array.from({ length: nPasses }, () =>
     seedWindow.map(row => [...row])
   )
-  const cumRs     = new Float64Array(nPasses)         // running compound return
-  const allPaths  = Array.from({ length: nPasses }, () => new Array(horizon))
+  const rawBufs = Array.from({ length: nPasses }, () => [...seedRaw])
+  const cumRs    = new Float64Array(nPasses)
+  const allPaths = Array.from({ length: nPasses }, () => new Array(horizon))
 
   for (let t = 0; t < horizon; t++) {
-    // Stack all windows → batch tensor (nPasses, lookback, nFeatures)
     const flatData = new Float32Array(nPasses * lookback * nFeatures)
     for (let p = 0; p < nPasses; p++) {
       const base = p * lookback * nFeatures
@@ -99,35 +169,28 @@ export async function inferLSTM({
         }
       }
     }
-
     const batchTensor = tf.tensor3d(flatData, [nPasses, lookback, nFeatures])
-
-    // MC Dropout ON: training=true keeps Dropout layers active
-    // model.apply() is the low-level call that respects the training kwarg
-    const predTensor  = model.apply(batchTensor, { training: true })
-    const preds       = await predTensor.data()   // Float32Array(nPasses)
-
+    const predTensor  = model.apply(batchTensor, { training: true })  // MC Dropout ON
+    const preds       = await predTensor.data()
     batchTensor.dispose()
     predTensor.dispose()
 
     for (let p = 0; p < nPasses; p++) {
       const rScaled = preds[p]
-
-      // Inverse MinMaxScaler (feature_range=(-1,1)):
-      // x = (rScaled + 1) * (data_max - data_min) / 2 + data_min
-      const rReal = (rScaled + 1) * (scalerMax[0] - scalerMin[0]) / 2 + scalerMin[0]
+      const rReal   = unscale(rScaled, scalerMin, scalerMax, F_RET)
 
       cumRs[p] = (1 + cumRs[p]) * (1 + rReal) - 1
       allPaths[p][t] = cumRs[p]
 
-      // Slide window: shift left by 1, append new row
-      const newRow = [...windows[p][lookback - 1]]
-      newRow[0] = rScaled   // update return feature with scaled prediction
+      rawBufs[p].push(rReal)
+      if (rawBufs[p].length > 64) rawBufs[p].shift()
+
+      const newRow = buildScaledFeatureRow(rawBufs[p], scalerMin, scalerMax)
       windows[p] = [...windows[p].slice(1), newRow]
     }
   }
 
-  // Compute percentile bands across MC passes
+  // ── Percentile bands across MC passes ──────────────────────────────────────
   const p5  = new Array(horizon)
   const p25 = new Array(horizon)
   const p50 = new Array(horizon)
@@ -137,17 +200,16 @@ export async function inferLSTM({
   for (let t = 0; t < horizon; t++) {
     const vals = allPaths.map(path => path[t]).sort((a, b) => a - b)
     const n    = vals.length
-    p5[t]  = vals[Math.max(0, Math.floor(0.05  * n))] * 100
-    p25[t] = vals[Math.max(0, Math.floor(0.25  * n))] * 100
-    p50[t] = vals[Math.max(0, Math.floor(0.50  * n))] * 100
-    p75[t] = vals[Math.max(0, Math.floor(0.75  * n))] * 100
+    p5[t]  = vals[Math.max(0, Math.floor(0.05 * n))] * 100
+    p25[t] = vals[Math.max(0, Math.floor(0.25 * n))] * 100
+    p50[t] = vals[Math.max(0, Math.floor(0.50 * n))] * 100
+    p75[t] = vals[Math.max(0, Math.floor(0.75 * n))] * 100
     p95[t] = vals[Math.min(n - 1, Math.floor(0.95 * n))] * 100
   }
 
   return { dates: forecastDates, p5, p25, p50, p75, p95 }
 }
 
-/** True after first successful model load — lets UI skip the "model not found" skeleton. */
 export function isModelLoaded() {
   return _model !== null
 }

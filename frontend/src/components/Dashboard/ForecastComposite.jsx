@@ -105,7 +105,6 @@ function MethodEffectivenessTable({ results, ensemble }) {
       const p50end = r?.forecast?.p50?.at(-1)
       return { method, r, w, q, ql, p50end }
     })
-    .filter(row => row.r || row.w != null)
 
   if (!rows.length) return null
 

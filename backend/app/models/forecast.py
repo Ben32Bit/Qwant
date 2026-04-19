@@ -3,7 +3,7 @@ Pydantic models for the /api/forecast endpoint.
 """
 
 from __future__ import annotations
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel
 
 
@@ -19,7 +19,7 @@ class ForecastRequest(BaseModel):
     end_date: str                     # YYYY-MM-DD (last historical date)
     horizon_days: int = 252
     n_paths: int = 1000
-    methods: list[str] = ["monte_carlo", "garch", "factor", "hmm", "var", "lstm"]
+    methods: list[str] = ["xgboost", "nbeats", "factor", "hmm", "var", "lstm"]
     ff5_decomposition: Optional[dict] = None
 
 
@@ -40,6 +40,7 @@ class MethodResult(BaseModel):
     metadata: dict = {}
     error: Optional[str] = None
     compute_ms: int = 0
+    status: Literal["ok", "error", "skipped"] = "ok"
 
 
 class ForecastResponse(BaseModel):

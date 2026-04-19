@@ -889,12 +889,16 @@ def prepare_lstm_features(
     last_window    = scaled[-LOOKBACK:].tolist()    # (60, 5)
     forecast_dates = _forecast_dates(last_date, horizon)
 
+    # raw return seed lets the client rebuild all 5 features during rollout
+    raw_return_seed = r.iloc[-64:].tolist()  # 64 ≥ 21 (vol window) + buffer
+
     return {
-        "last_window":    last_window,
-        "scaler_min":     scaler.data_min_.tolist(),
-        "scaler_max":     scaler.data_max_.tolist(),
-        "feature_names":  feat_cols,
-        "forecast_dates": forecast_dates,
+        "last_window":     last_window,
+        "scaler_min":      scaler.data_min_.tolist(),
+        "scaler_max":      scaler.data_max_.tolist(),
+        "feature_names":   feat_cols,
+        "forecast_dates":  forecast_dates,
+        "raw_return_seed": raw_return_seed,
     }
 
 
@@ -1045,9 +1049,8 @@ def run_all_forecasts(req) -> dict:
         label = METHOD_LABELS.get(method, method)
         color = METHOD_COLORS.get(method, "#888888")
         try:
+            # ── Client-side methods: server returns features only, no band ─────
             if method == "xgboost":
-                # XGBoost runs client-side via ONNX Runtime Web (Phase 2A upgrade).
-                # Server returns 9 raw features; ONNX Pipeline handles scaling.
                 out = prepare_xgboost_features(returns, h, last_date)
                 results.append(MethodResult(
                     method=method, label=label, color=color,
@@ -1065,9 +1068,8 @@ def run_all_forecasts(req) -> dict:
                     },
                 ))
                 continue
-            elif method == "nbeats":
-                # N-BEATS runs client-side via ONNX Runtime Web (Phase 2B upgrade).
-                # Server returns last-30-day return window; client normalises + infers.
+
+            if method == "nbeats":
                 out = prepare_nbeats_features(returns, h, last_date)
                 results.append(MethodResult(
                     method=method, label=label, color=color,
@@ -1075,46 +1077,14 @@ def run_all_forecasts(req) -> dict:
                     metadata={
                         "client_side":    True,
                         "nbeats_features": out,
-                        "architecture":   f"N-BEATS: {3} blocks × FC({256})×{4} → backcast + forecast",
+                        "architecture":   "N-BEATS: 3 blocks × FC(256)×4 → backcast + forecast",
                         "quantiles":      [0.05, 0.25, 0.50, 0.75, 0.95],
                         "macro_context":  macro_ctx or None,
                     },
                 ))
                 continue
-            elif method == "garch":
-                raise ValueError("GARCH replaced by N-BEATS (Phase 2B). Use method='nbeats'.")
-            elif method == "hmm":
-                out = forecast_hmm(returns, h, np_, last_date, macro_ctx or None)
-                if trends_ctx and "metadata" in out:
-                    out["metadata"]["trends_context"] = _portfolio_trends(trends_ctx, weights)
-                if news_ctx and "metadata" in out:
-                    out["metadata"]["news_article_count"] = news_ctx.get("portfolio_summary", {}).get("total_articles")
-                # 5A: compute 4-state regime after HMM (non-fatal)
-                try:
-                    from .meta_learner import compute_regime_probs, get_ensemble_weights
-                    vix_rank = macro_ctx.get("vix_pct_rank", 0.5) if macro_ctx else 0.5
-                    rp       = compute_regime_probs(out.get("metadata", {}), vix_rank)
-                    ew       = get_ensemble_weights(rp, req.methods)
-                    _hmm_out_extras["regime_probs"]     = rp
-                    _hmm_out_extras["ensemble_weights"] = ew
-                    logger.info("Regime: %s (dom=%s)", rp, rp.get("dominant"))
-                except Exception as exc:
-                    logger.debug("Regime classification failed: %s", exc)
-            elif method == "factor":
-                out = forecast_factor(returns, h, np_, last_date, req.ff5_decomposition,
-                                      macro_ctx or None)
-                if insider.get("available") and "metadata" in out:
-                    out["metadata"]["insider_context"] = insider
-            elif method == "var":
-                # Phase 2D: VAR replaced by Gaussian Process autoregression.
-                out = forecast_gp(returns, h, last_date)
-                if macro_ctx and "metadata" in out:
-                    out["metadata"]["vix_pct_rank"]      = macro_ctx.get("vix_pct_rank")
-                    out["metadata"]["vix_term_slope"]    = macro_ctx.get("vix_term_slope")
-                    out["metadata"]["yield_curve_10y2y"] = macro_ctx.get("yield_curve_10y2y")
-            elif method == "lstm":
-                # LSTM runs client-side in the browser via TF.js (Phase 1 upgrade).
-                # Server returns feature window + scaler params; no forecast band here.
+
+            if method == "lstm":
                 out = prepare_lstm_features(returns, h, last_date)
                 results.append(MethodResult(
                     method=method, label=label, color=color,
@@ -1130,11 +1100,63 @@ def run_all_forecasts(req) -> dict:
                 ))
                 continue
 
+            # ── Legacy/removed methods ───────────────────────────────────────────
+            if method in ("monte_carlo", "garch"):
+                raise ValueError(
+                    f"Method '{method}' was removed. "
+                    "Use 'xgboost' (replaced monte_carlo) or 'nbeats' (replaced garch)."
+                )
+
+            # ── Server-side methods: compute band directly ─────────────────────
+            if method == "hmm":
+                out = forecast_hmm(returns, h, np_, last_date, macro_ctx or None)
+                if trends_ctx:
+                    out["metadata"]["trends_context"] = _portfolio_trends(trends_ctx, weights)
+                if news_ctx:
+                    out["metadata"]["news_article_count"] = news_ctx.get("portfolio_summary", {}).get("total_articles")
+                # Phase 5A: 4-state regime classification after HMM (non-fatal)
+                try:
+                    from .meta_learner import compute_regime_probs, get_ensemble_weights
+                    vix_rank = macro_ctx.get("vix_pct_rank", 0.5) if macro_ctx else 0.5
+                    rp = compute_regime_probs(out.get("metadata", {}), vix_rank)
+                    ew = get_ensemble_weights(rp, req.methods)
+                    _hmm_out_extras["regime_probs"]     = rp
+                    _hmm_out_extras["ensemble_weights"] = ew
+                    logger.info("Regime: %s (dom=%s)", rp, rp.get("dominant"))
+                except Exception as exc:
+                    logger.debug("Regime classification failed: %s", exc)
+
+            elif method == "factor":
+                out = forecast_factor(returns, h, np_, last_date,
+                                     req.ff5_decomposition, macro_ctx or None)
+                if insider.get("available"):
+                    out["metadata"]["insider_context"] = insider
+
+            elif method == "var":
+                # VAR key preserved for backward compat; computes Gaussian Process
+                out = forecast_gp(returns, h, last_date)
+                if macro_ctx:
+                    out["metadata"]["vix_pct_rank"]      = macro_ctx.get("vix_pct_rank")
+                    out["metadata"]["vix_term_slope"]    = macro_ctx.get("vix_term_slope")
+                    out["metadata"]["yield_curve_10y2y"] = macro_ctx.get("yield_curve_10y2y")
+
+            else:
+                raise ValueError(f"Unknown forecast method: {method!r}")
+
+            # ── Common append path for hmm/factor/var ─────────────────────────
+            results.append(MethodResult(
+                method=method, label=label, color=color,
+                forecast=ForecastBand(**out["band"]),
+                metadata=out.get("metadata", {}),
+                compute_ms=out.get("compute_ms", 0),
+            ))
+
         except Exception as e:
             logger.warning("Forecast method %s failed: %s", method, e)
             results.append(MethodResult(
                 method=method, label=label, color=color,
                 error=str(e),
+                status="error",
             ))
 
     tier2_summary = {

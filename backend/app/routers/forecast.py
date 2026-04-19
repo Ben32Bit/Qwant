@@ -15,11 +15,11 @@ async def run_forecast(request: Request, body: ForecastRequest):
     """
     Run probabilistic 12-month portfolio forecasts using up to 6 methods.
 
-    Methods: monte_carlo | garch | hmm | factor | var | lstm
+    Methods: xgboost | nbeats | factor | hmm | var | lstm
 
     Supports two-phase fetching from the frontend:
-      Phase 1: methods=["monte_carlo","garch","factor"]   → ~1-2s
-      Phase 2: methods=["hmm","var","lstm"]                → ~10-40s
+      Phase 1: methods=["xgboost","nbeats","factor"]   → ~1-2s
+      Phase 2: methods=["hmm","var","lstm"]              → ~10-40s
 
     Returns a ForecastResponse where each method either has a forecast
     fan band or an error string (no method failure kills the endpoint).
