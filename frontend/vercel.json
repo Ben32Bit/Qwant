@@ -5,7 +5,7 @@
       "destination": "https://qwant-production.up.railway.app/api/:path*"
     },
     {
-      "source": "/((?!models/|assets/|.*\\.(?:onnx|json|wasm|js|css|png|jpg|jpeg|svg|ico|woff2?|ttf|map|txt|webp|bin)).*)",
+      "source": "/:slug([^.]*)",
       "destination": "/index.html"
     }
   ]

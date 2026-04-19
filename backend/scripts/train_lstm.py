@@ -3,25 +3,37 @@ train_lstm.py — Local training script for the browser-side Attention-LSTM.
 
 Run ONCE locally to train and export the model:
   cd backend
-  pip install tensorflow scikit-learn pandas yfinance
+  pip install tensorflow tf_keras scikit-learn pandas yfinance
   python scripts/train_lstm.py
 
 Outputs:
   backend/scripts/lstm_model.keras           (Keras saved model)
-  frontend/public/models/lstm/model.json     (TF.js model config)
+  frontend/public/models/lstm/model.json     (TF.js model config — Keras 2 format)
   frontend/public/models/lstm/group1-shard1of1.bin  (weight data)
 
-NOTE: tensorflowjs CLI is NOT required. We write the TF.js format manually —
-the CLI is broken with TF 2.16+ due to numpy 2.x / tensorflow_hub conflicts.
+IMPORTANT — Keras 2 vs Keras 3:
+  TF.js 4.x LayersModel loader only reads the legacy Keras 2 JSON format
+  (batch_input_shape, flat dtype strings, layer-scoped weight names).
+  TF 2.16+ ships Keras 3 by default, whose JSON uses `batch_shape`,
+  `DTypePolicy` objects, and bare weight names — this causes
+  TF.js to fail with "InputLayer should be passed either batchInputShape
+  or inputShape".
+
+  This script forces legacy Keras 2 via the `tf_keras` package and the
+  TF_USE_LEGACY_KERAS env var. Make sure tf_keras is installed:
+      pip install tf_keras
 
 Architecture: Input(60,5) → LSTM(64) → Bahdanau attention
               → GlobalAveragePooling1D → Dropout(0.20) → Dense(32) → Dense(1)
 Model size: ~300-500 KB
 """
 
+import os
+# Must be set BEFORE importing tensorflow so TF dispatches to tf_keras.
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
+
 import sys
 import json
-import os
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -31,9 +43,18 @@ from pathlib import Path
 
 try:
     import tensorflow as tf
-    from tensorflow import keras
 except ImportError:
-    sys.exit("ERROR: TensorFlow not installed. Run: pip install tensorflow")
+    sys.exit("ERROR: TensorFlow not installed. Run: pip install tensorflow tf_keras")
+
+# Force Keras 2 (legacy) for TF.js compatibility.
+try:
+    import tf_keras as keras
+except ImportError:
+    sys.exit(
+        "ERROR: tf_keras not installed — required for TF.js-compatible export.\n"
+        "Run: pip install tf_keras\n"
+        "(TF.js 4.x cannot load Keras 3 JSON. tf_keras provides the Keras 2 API.)"
+    )
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 SCRIPT_DIR   = Path(__file__).parent
@@ -134,21 +155,65 @@ def build_attention_lstm(lookback: int, n_features: int, attn_units: int = 32):
 # compatibility issues). We write the TF.js LayersModel format directly:
 #   model.json  — model topology (from model.to_json()) + weights manifest
 #   *.bin       — concatenated float32 weight arrays (little-endian)
+#
+# Requires legacy Keras 2 (tf_keras) — Keras 3's JSON format is not TF.js compatible.
+
+def _strip_tensor_suffix(name: str) -> str:
+    # Keras 2 weight names look like "lstm_enc/kernel:0"; TF.js expects the
+    # tensor ":0" suffix stripped so the manifest matches what the loader expects.
+    return name.split(":")[0]
+
+
+def _validate_topology_for_tfjs(topology: dict) -> None:
+    """Sanity-check the exported model.json is in the format TF.js 4.x expects."""
+    layers = topology.get("config", {}).get("layers", [])
+    if not layers:
+        raise RuntimeError("Exported topology has no layers — model.to_json() returned empty.")
+
+    # Find the first layer with any shape info
+    first = layers[0]
+    first_cfg = first.get("config", {})
+    has_bis = "batch_input_shape" in first_cfg or "batchInputShape" in first_cfg
+
+    # Keras 3 uses "batch_shape"; we need to reject that
+    if "batch_shape" in first_cfg and not has_bis:
+        raise RuntimeError(
+            "Exported model.json uses Keras 3's `batch_shape` field, which TF.js "
+            "4.x cannot parse (it wants `batch_input_shape`). Make sure `tf_keras` "
+            "is installed and `TF_USE_LEGACY_KERAS=1` is set before importing TF. "
+            f"Layer 0 config keys: {sorted(first_cfg.keys())}"
+        )
+
+    # Reject Keras 3 DTypePolicy dtype wrappers (TF.js expects flat "float32" strings)
+    for lyr in layers:
+        dt = lyr.get("config", {}).get("dtype")
+        if isinstance(dt, dict):
+            raise RuntimeError(
+                f"Layer '{lyr.get('name')}' has a Keras 3 DTypePolicy dtype object "
+                f"instead of a flat 'float32' string. TF.js will fail to load. "
+                "Install tf_keras and set TF_USE_LEGACY_KERAS=1."
+            )
+
 
 def export_tfjs(model, output_dir: Path):
     """Write TF.js LayersModel format without the tensorflowjs package."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Model topology from Keras JSON serialisation
+    # Model topology from Keras 2 JSON serialisation (tf_keras produces the
+    # legacy format natively — no conversion needed).
     topology = json.loads(model.to_json())
 
-    # Weight specs + binary payload
+    # Fail loudly if the format is not TF.js-compatible
+    _validate_topology_for_tfjs(topology)
+
+    # Weight specs + binary payload. TF.js wants layer-scoped names WITHOUT
+    # the ":0" TF variable suffix.
     weight_specs = []
     buffers = []
     for w in model.weights:
         arr = w.numpy().astype(np.float32)
         weight_specs.append({
-            "name":  w.name,
+            "name":  _strip_tensor_suffix(w.name),
             "shape": list(arr.shape),
             "dtype": "float32",
         })
@@ -161,7 +226,7 @@ def export_tfjs(model, output_dir: Path):
 
     model_json = {
         "format":       "layers-model",
-        "generatedBy":  f"keras {keras.__version__}",
+        "generatedBy":  f"keras {keras.__version__} (legacy tf_keras)",
         "convertedBy":  "manual (train_lstm.py)",
         "modelTopology": topology,
         "weightsManifest": [{
@@ -175,6 +240,7 @@ def export_tfjs(model, output_dir: Path):
     total_kb = sum(len(b) for b in buffers) // 1024
     print(f"  model.json + {bin_filename}  ({total_kb} KB weights)")
     print(f"  {len(weight_specs)} weight tensors")
+    print(f"  First weight name: {weight_specs[0]['name']}  (should be layer-scoped)")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

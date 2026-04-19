@@ -68,38 +68,68 @@ export function useForecast(backtest, portfolio) {
       if (xgbResult) {
         xgbStart.current = Date.now()
         setLoading(l => ({ ...l, xgb: true }))
-        const { xgb_features } = xgbResult.metadata
-        tasks.push(
-          import('../ml/XGBoostInferer.js')
-            .then(({ inferXGBoost }) => inferXGBoost({
-              features:      xgb_features.features,
-              forecastDates: xgb_features.forecast_dates,
-            }))
-            .then(band => {
-              const xgbMs = Date.now() - (xgbStart.current ?? Date.now())
-              setTiming(t => ({ ...t, xgbMs }))
-              setPhase1(p1 => p1 ? {
-                ...p1,
-                results: p1.results.map(r => r.method !== 'xgboost' ? r : {
-                  ...r, forecast: band, compute_ms: xgbMs,
-                  metadata: {
-                    oos_r2: xgb_features.oos_r2 ?? null,
-                    ret_21d_ann: xgb_features.ret_21d_ann,
-                    vol_21d_ann: xgb_features.vol_21d_ann,
-                    rsi_14: xgb_features.rsi_14,
-                    vol_regime: xgb_features.vol_regime,
-                    n_obs: xgb_features.n_obs,
-                    client_side: false,
-                  },
-                }),
-              } : p1)
-            })
-            .catch(e => setPhase1(p1 => p1 ? {
-              ...p1,
-              results: p1.results.map(r => r.method !== 'xgboost' ? r : { ...r, error: e.message }),
-            } : p1))
-            .finally(() => setLoading(l => ({ ...l, xgb: false })))
-        )
+        const xgb_features = xgbResult.metadata?.xgb_features
+        // Guard: if the server contract broke and features aren't present,
+        // fail the card loudly instead of letting the browser task hang
+        // and leave the UI stuck on "waiting…".
+        if (!xgb_features || !Array.isArray(xgb_features.features)) {
+          setPhase1(p1 => p1 ? {
+            ...p1,
+            results: p1.results.map(r => r.method !== 'xgboost' ? r : {
+              ...r, error: 'XGBoost: server returned no feature bundle',
+            }),
+          } : p1)
+          setLoading(l => ({ ...l, xgb: false }))
+        } else {
+          tasks.push(
+            import('../ml/XGBoostInferer.js')
+              .then(({ inferXGBoost }) => inferXGBoost({
+                features:      xgb_features.features,
+                forecastDates: xgb_features.forecast_dates,
+              }))
+              .then(band => {
+                const xgbMs = Date.now() - (xgbStart.current ?? Date.now())
+                setTiming(t => ({ ...t, xgbMs }))
+                setPhase1(p1 => p1 ? {
+                  ...p1,
+                  results: p1.results.map(r => r.method !== 'xgboost' ? r : {
+                    ...r, forecast: band, compute_ms: xgbMs,
+                    metadata: {
+                      oos_r2: xgb_features.oos_r2 ?? null,
+                      ret_21d_ann: xgb_features.ret_21d_ann,
+                      vol_21d_ann: xgb_features.vol_21d_ann,
+                      rsi_14: xgb_features.rsi_14,
+                      vol_regime: xgb_features.vol_regime,
+                      n_obs: xgb_features.n_obs,
+                      client_side: false,
+                    },
+                  }),
+                } : p1)
+              })
+              .catch(e => {
+                console.warn('XGBoost inference failed:', e)
+                setPhase1(p1 => p1 ? {
+                  ...p1,
+                  results: p1.results.map(r => r.method !== 'xgboost' ? r : {
+                    ...r, error: `XGBoost: ${e?.message ?? String(e)}`,
+                  }),
+                } : p1)
+              })
+              .finally(() => setLoading(l => ({ ...l, xgb: false })))
+          )
+        }
+      } else {
+        // Server returned xgboost result but without client_side — surface
+        // this rather than leaving the card on "waiting…" forever.
+        const rawXgb = p1Data.results?.find(r => r.method === 'xgboost')
+        if (rawXgb && !rawXgb.error && !rawXgb.forecast) {
+          setPhase1(p1 => p1 ? {
+            ...p1,
+            results: p1.results.map(r => r.method !== 'xgboost' ? r : {
+              ...r, error: 'XGBoost: server did not flag client_side inference',
+            }),
+          } : p1)
+        }
       }
 
       if (nbeatsResult) {
