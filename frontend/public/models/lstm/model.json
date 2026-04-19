@@ -1,9 +1,8 @@
 {
   "format": "layers-model",
-  "generatedBy": "keras 3.14.0",
+  "generatedBy": "keras 2.21.0 (legacy tf_keras)",
   "convertedBy": "manual (train_lstm.py)",
   "modelTopology": {
-    "module": "keras.src.models.functional",
     "class_name": "Functional",
     "config": {
       "name": "attention_lstm",
@@ -13,7 +12,7 @@
           "module": "keras.layers",
           "class_name": "InputLayer",
           "config": {
-            "batch_shape": [
+            "batch_input_shape": [
               null,
               60,
               5
@@ -34,20 +33,13 @@
           "config": {
             "name": "lstm_enc",
             "trainable": true,
-            "dtype": {
-              "module": "keras",
-              "class_name": "DTypePolicy",
-              "config": {
-                "name": "float32"
-              },
-              "registered_name": null
-            },
+            "dtype": "float32",
             "return_sequences": true,
             "return_state": false,
             "go_backwards": false,
             "stateful": false,
             "unroll": false,
-            "zero_output_for_mask": false,
+            "time_major": false,
             "units": 64,
             "activation": "tanh",
             "recurrent_activation": "sigmoid",
@@ -64,8 +56,8 @@
               "module": "keras.initializers",
               "class_name": "Orthogonal",
               "config": {
-                "seed": null,
-                "gain": 1.0
+                "gain": 1.0,
+                "seed": null
               },
               "registered_name": null
             },
@@ -85,7 +77,7 @@
             "bias_constraint": null,
             "dropout": 0.2,
             "recurrent_dropout": 0.1,
-            "seed": null
+            "implementation": 1
           },
           "registered_name": null,
           "build_config": {
@@ -97,30 +89,14 @@
           },
           "name": "lstm_enc",
           "inbound_nodes": [
-            {
-              "args": [
-                {
-                  "class_name": "__keras_tensor__",
-                  "config": {
-                    "shape": [
-                      null,
-                      60,
-                      5
-                    ],
-                    "dtype": "float32",
-                    "keras_history": [
-                      "input",
-                      0,
-                      0
-                    ]
-                  }
-                }
-              ],
-              "kwargs": {
-                "training": false,
-                "mask": null
-              }
-            }
+            [
+              [
+                "input",
+                0,
+                0,
+                {}
+              ]
+            ]
           ]
         },
         {
@@ -129,14 +105,7 @@
           "config": {
             "name": "attn_W",
             "trainable": true,
-            "dtype": {
-              "module": "keras",
-              "class_name": "DTypePolicy",
-              "config": {
-                "name": "float32"
-              },
-              "registered_name": null
-            },
+            "dtype": "float32",
             "units": 32,
             "activation": "linear",
             "use_bias": false,
@@ -156,9 +125,9 @@
             },
             "kernel_regularizer": null,
             "bias_regularizer": null,
+            "activity_regularizer": null,
             "kernel_constraint": null,
-            "bias_constraint": null,
-            "quantization_config": null
+            "bias_constraint": null
           },
           "registered_name": null,
           "build_config": {
@@ -170,27 +139,14 @@
           },
           "name": "attn_W",
           "inbound_nodes": [
-            {
-              "args": [
-                {
-                  "class_name": "__keras_tensor__",
-                  "config": {
-                    "shape": [
-                      null,
-                      60,
-                      64
-                    ],
-                    "dtype": "float32",
-                    "keras_history": [
-                      "lstm_enc",
-                      0,
-                      0
-                    ]
-                  }
-                }
-              ],
-              "kwargs": {}
-            }
+            [
+              [
+                "lstm_enc",
+                0,
+                0,
+                {}
+              ]
+            ]
           ]
         },
         {
@@ -199,40 +155,27 @@
           "config": {
             "name": "attn_tanh",
             "trainable": true,
-            "dtype": {
-              "module": "keras",
-              "class_name": "DTypePolicy",
-              "config": {
-                "name": "float32"
-              },
-              "registered_name": null
-            },
+            "dtype": "float32",
             "activation": "tanh"
           },
           "registered_name": null,
+          "build_config": {
+            "input_shape": [
+              null,
+              60,
+              32
+            ]
+          },
           "name": "attn_tanh",
           "inbound_nodes": [
-            {
-              "args": [
-                {
-                  "class_name": "__keras_tensor__",
-                  "config": {
-                    "shape": [
-                      null,
-                      60,
-                      32
-                    ],
-                    "dtype": "float32",
-                    "keras_history": [
-                      "attn_W",
-                      0,
-                      0
-                    ]
-                  }
-                }
-              ],
-              "kwargs": {}
-            }
+            [
+              [
+                "attn_W",
+                0,
+                0,
+                {}
+              ]
+            ]
           ]
         },
         {
@@ -241,14 +184,7 @@
           "config": {
             "name": "attn_v",
             "trainable": true,
-            "dtype": {
-              "module": "keras",
-              "class_name": "DTypePolicy",
-              "config": {
-                "name": "float32"
-              },
-              "registered_name": null
-            },
+            "dtype": "float32",
             "units": 1,
             "activation": "linear",
             "use_bias": false,
@@ -268,9 +204,9 @@
             },
             "kernel_regularizer": null,
             "bias_regularizer": null,
+            "activity_regularizer": null,
             "kernel_constraint": null,
-            "bias_constraint": null,
-            "quantization_config": null
+            "bias_constraint": null
           },
           "registered_name": null,
           "build_config": {
@@ -282,27 +218,14 @@
           },
           "name": "attn_v",
           "inbound_nodes": [
-            {
-              "args": [
-                {
-                  "class_name": "__keras_tensor__",
-                  "config": {
-                    "shape": [
-                      null,
-                      60,
-                      32
-                    ],
-                    "dtype": "float32",
-                    "keras_history": [
-                      "attn_tanh",
-                      0,
-                      0
-                    ]
-                  }
-                }
-              ],
-              "kwargs": {}
-            }
+            [
+              [
+                "attn_tanh",
+                0,
+                0,
+                {}
+              ]
+            ]
           ]
         },
         {
@@ -311,42 +234,27 @@
           "config": {
             "name": "attn_softmax",
             "trainable": true,
-            "dtype": {
-              "module": "keras",
-              "class_name": "DTypePolicy",
-              "config": {
-                "name": "float32"
-              },
-              "registered_name": null
-            },
+            "dtype": "float32",
             "axis": 1
           },
           "registered_name": null,
+          "build_config": {
+            "input_shape": [
+              null,
+              60,
+              1
+            ]
+          },
           "name": "attn_softmax",
           "inbound_nodes": [
-            {
-              "args": [
-                {
-                  "class_name": "__keras_tensor__",
-                  "config": {
-                    "shape": [
-                      null,
-                      60,
-                      1
-                    ],
-                    "dtype": "float32",
-                    "keras_history": [
-                      "attn_v",
-                      0,
-                      0
-                    ]
-                  }
-                }
-              ],
-              "kwargs": {
-                "mask": null
-              }
-            }
+            [
+              [
+                "attn_v",
+                0,
+                0,
+                {}
+              ]
+            ]
           ]
         },
         {
@@ -355,14 +263,7 @@
           "config": {
             "name": "weighted",
             "trainable": true,
-            "dtype": {
-              "module": "keras",
-              "class_name": "DTypePolicy",
-              "config": {
-                "name": "float32"
-              },
-              "registered_name": null
-            }
+            "dtype": "float32"
           },
           "registered_name": null,
           "build_config": {
@@ -381,45 +282,20 @@
           },
           "name": "weighted",
           "inbound_nodes": [
-            {
-              "args": [
-                [
-                  {
-                    "class_name": "__keras_tensor__",
-                    "config": {
-                      "shape": [
-                        null,
-                        60,
-                        64
-                      ],
-                      "dtype": "float32",
-                      "keras_history": [
-                        "lstm_enc",
-                        0,
-                        0
-                      ]
-                    }
-                  },
-                  {
-                    "class_name": "__keras_tensor__",
-                    "config": {
-                      "shape": [
-                        null,
-                        60,
-                        1
-                      ],
-                      "dtype": "float32",
-                      "keras_history": [
-                        "attn_softmax",
-                        0,
-                        0
-                      ]
-                    }
-                  }
-                ]
+            [
+              [
+                "lstm_enc",
+                0,
+                0,
+                {}
               ],
-              "kwargs": {}
-            }
+              [
+                "attn_softmax",
+                0,
+                0,
+                {}
+              ]
+            ]
           ]
         },
         {
@@ -428,43 +304,28 @@
           "config": {
             "name": "context",
             "trainable": true,
-            "dtype": {
-              "module": "keras",
-              "class_name": "DTypePolicy",
-              "config": {
-                "name": "float32"
-              },
-              "registered_name": null
-            },
+            "dtype": "float32",
             "data_format": "channels_last",
             "keepdims": false
           },
           "registered_name": null,
+          "build_config": {
+            "input_shape": [
+              null,
+              60,
+              64
+            ]
+          },
           "name": "context",
           "inbound_nodes": [
-            {
-              "args": [
-                {
-                  "class_name": "__keras_tensor__",
-                  "config": {
-                    "shape": [
-                      null,
-                      60,
-                      64
-                    ],
-                    "dtype": "float32",
-                    "keras_history": [
-                      "weighted",
-                      0,
-                      0
-                    ]
-                  }
-                }
-              ],
-              "kwargs": {
-                "mask": null
-              }
-            }
+            [
+              [
+                "weighted",
+                0,
+                0,
+                {}
+              ]
+            ]
           ]
         },
         {
@@ -473,43 +334,28 @@
           "config": {
             "name": "head_drop",
             "trainable": true,
-            "dtype": {
-              "module": "keras",
-              "class_name": "DTypePolicy",
-              "config": {
-                "name": "float32"
-              },
-              "registered_name": null
-            },
+            "dtype": "float32",
             "rate": 0.2,
-            "seed": null,
-            "noise_shape": null
+            "noise_shape": null,
+            "seed": null
           },
           "registered_name": null,
+          "build_config": {
+            "input_shape": [
+              null,
+              64
+            ]
+          },
           "name": "head_drop",
           "inbound_nodes": [
-            {
-              "args": [
-                {
-                  "class_name": "__keras_tensor__",
-                  "config": {
-                    "shape": [
-                      null,
-                      64
-                    ],
-                    "dtype": "float32",
-                    "keras_history": [
-                      "context",
-                      0,
-                      0
-                    ]
-                  }
-                }
-              ],
-              "kwargs": {
-                "training": false
-              }
-            }
+            [
+              [
+                "context",
+                0,
+                0,
+                {}
+              ]
+            ]
           ]
         },
         {
@@ -518,14 +364,7 @@
           "config": {
             "name": "head_dense",
             "trainable": true,
-            "dtype": {
-              "module": "keras",
-              "class_name": "DTypePolicy",
-              "config": {
-                "name": "float32"
-              },
-              "registered_name": null
-            },
+            "dtype": "float32",
             "units": 32,
             "activation": "relu",
             "use_bias": true,
@@ -545,9 +384,9 @@
             },
             "kernel_regularizer": null,
             "bias_regularizer": null,
+            "activity_regularizer": null,
             "kernel_constraint": null,
-            "bias_constraint": null,
-            "quantization_config": null
+            "bias_constraint": null
           },
           "registered_name": null,
           "build_config": {
@@ -558,26 +397,14 @@
           },
           "name": "head_dense",
           "inbound_nodes": [
-            {
-              "args": [
-                {
-                  "class_name": "__keras_tensor__",
-                  "config": {
-                    "shape": [
-                      null,
-                      64
-                    ],
-                    "dtype": "float32",
-                    "keras_history": [
-                      "head_drop",
-                      0,
-                      0
-                    ]
-                  }
-                }
-              ],
-              "kwargs": {}
-            }
+            [
+              [
+                "head_drop",
+                0,
+                0,
+                {}
+              ]
+            ]
           ]
         },
         {
@@ -586,14 +413,7 @@
           "config": {
             "name": "output",
             "trainable": true,
-            "dtype": {
-              "module": "keras",
-              "class_name": "DTypePolicy",
-              "config": {
-                "name": "float32"
-              },
-              "registered_name": null
-            },
+            "dtype": "float32",
             "units": 1,
             "activation": "linear",
             "use_bias": true,
@@ -613,9 +433,9 @@
             },
             "kernel_regularizer": null,
             "bias_regularizer": null,
+            "activity_regularizer": null,
             "kernel_constraint": null,
-            "bias_constraint": null,
-            "quantization_config": null
+            "bias_constraint": null
           },
           "registered_name": null,
           "build_config": {
@@ -626,75 +446,34 @@
           },
           "name": "output",
           "inbound_nodes": [
-            {
-              "args": [
-                {
-                  "class_name": "__keras_tensor__",
-                  "config": {
-                    "shape": [
-                      null,
-                      32
-                    ],
-                    "dtype": "float32",
-                    "keras_history": [
-                      "head_dense",
-                      0,
-                      0
-                    ]
-                  }
-                }
-              ],
-              "kwargs": {}
-            }
+            [
+              [
+                "head_dense",
+                0,
+                0,
+                {}
+              ]
+            ]
           ]
         }
       ],
       "input_layers": [
-        "input",
-        0,
-        0
+        [
+          "input",
+          0,
+          0
+        ]
       ],
       "output_layers": [
-        "output",
-        0,
-        0
+        [
+          "output",
+          0,
+          0
+        ]
       ]
     },
-    "registered_name": "Functional",
-    "build_config": {
-      "input_shape": null
-    },
-    "compile_config": {
-      "optimizer": {
-        "module": "keras.optimizers",
-        "class_name": "Adam",
-        "config": {
-          "name": "adam",
-          "learning_rate": 0.0001250000059371814,
-          "weight_decay": null,
-          "clipnorm": null,
-          "global_clipnorm": null,
-          "clipvalue": null,
-          "use_ema": false,
-          "ema_momentum": 0.99,
-          "ema_overwrite_frequency": null,
-          "loss_scale_factor": null,
-          "gradient_accumulation_steps": null,
-          "beta_1": 0.9,
-          "beta_2": 0.999,
-          "epsilon": 1e-07,
-          "amsgrad": false
-        },
-        "registered_name": null
-      },
-      "loss": "mse",
-      "loss_weights": null,
-      "metrics": null,
-      "weighted_metrics": null,
-      "run_eagerly": false,
-      "steps_per_execution": 1,
-      "jit_compile": false
-    }
+    "keras_version": "2.21.0",
+    "backend": "tensorflow"
   },
   "weightsManifest": [
     {
@@ -703,7 +482,7 @@
       ],
       "weights": [
         {
-          "name": "kernel",
+          "name": "lstm_enc/lstm_cell/kernel",
           "shape": [
             5,
             256
@@ -711,7 +490,7 @@
           "dtype": "float32"
         },
         {
-          "name": "recurrent_kernel",
+          "name": "lstm_enc/lstm_cell/recurrent_kernel",
           "shape": [
             64,
             256
@@ -719,14 +498,14 @@
           "dtype": "float32"
         },
         {
-          "name": "bias",
+          "name": "lstm_enc/lstm_cell/bias",
           "shape": [
             256
           ],
           "dtype": "float32"
         },
         {
-          "name": "kernel",
+          "name": "attn_W/kernel",
           "shape": [
             64,
             32
@@ -734,7 +513,7 @@
           "dtype": "float32"
         },
         {
-          "name": "kernel",
+          "name": "attn_v/kernel",
           "shape": [
             32,
             1
@@ -742,7 +521,7 @@
           "dtype": "float32"
         },
         {
-          "name": "kernel",
+          "name": "head_dense/kernel",
           "shape": [
             64,
             32
@@ -750,14 +529,14 @@
           "dtype": "float32"
         },
         {
-          "name": "bias",
+          "name": "head_dense/bias",
           "shape": [
             32
           ],
           "dtype": "float32"
         },
         {
-          "name": "kernel",
+          "name": "output/kernel",
           "shape": [
             32,
             1
@@ -765,7 +544,7 @@
           "dtype": "float32"
         },
         {
-          "name": "bias",
+          "name": "output/bias",
           "shape": [
             1
           ],
