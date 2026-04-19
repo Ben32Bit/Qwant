@@ -269,9 +269,21 @@ export function useForecast(backtest, portfolio) {
 
   const allResults = mergeResults(phase1, phase2)
 
+  // Phase 1 carries forecast_start / forecast_end; Phase 2 carries
+  // regime_probs + ensemble_weights (computed only after HMM lands).
+  // Surface both under a single `meta` so ForecastPanel doesn't need to
+  // know which phase owns which field.
+  const meta = (phase1 || phase2)
+    ? {
+        ...(phase1 ?? {}),
+        regime_probs:     phase2?.regime_probs     ?? phase1?.regime_probs     ?? null,
+        ensemble_weights: phase2?.ensemble_weights ?? phase1?.ensemble_weights ?? null,
+      }
+    : null
+
   return {
     results:        allResults,
-    meta:           phase1,
+    meta,
     loading,
     error,
     run,

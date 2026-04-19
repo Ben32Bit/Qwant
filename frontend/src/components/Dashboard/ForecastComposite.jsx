@@ -213,9 +213,18 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
       })
     }
 
+    // Overlay the regime-conditional ensemble median as a 7th line, only once
+    // at least two base methods have landed (otherwise it's degenerate).
+    if (ensemble?.band?.dates?.length && ensemble.band.p50?.length) {
+      ensemble.band.dates.forEach((d, i) => {
+        if (!forecastByDate[d]) forecastByDate[d] = { date: d }
+        forecastByDate[d].ensemble = lastValue * (1 + ensemble.band.p50[i] / 100)
+      })
+    }
+
     const forecastRows = Object.values(forecastByDate).sort((a, b) => a.date.localeCompare(b.date))
     return [...historical, ...forecastRows]
-  }, [equityCurve, results])
+  }, [equityCurve, results, ensemble])
 
   const tickCount = 10
   const tickDates = chartData.length
@@ -314,13 +323,28 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
                 dataKey={method}
                 name={r.label}
                 stroke={r.color}
-                strokeWidth={1.5}
+                strokeWidth={1.2}
+                strokeOpacity={0.55}
                 dot={false}
                 isAnimationActive={false}
                 connectNulls={false}
               />
             )
           })}
+
+          {/* Regime-conditional ensemble median — bold white line on top */}
+          {ensemble?.band?.p50?.length > 0 && (
+            <Line
+              type="monotone"
+              dataKey="ensemble"
+              name="Ensemble (regime-weighted)"
+              stroke="#ffffff"
+              strokeWidth={2.5}
+              dot={false}
+              isAnimationActive={false}
+              connectNulls={false}
+            />
+          )}
         </ComposedChart>
       </ResponsiveContainer>
     </div>
