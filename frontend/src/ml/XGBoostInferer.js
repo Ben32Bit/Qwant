@@ -70,12 +70,22 @@ async function getSession(tag) {
   const ort = await getOrt()
   const url = `${MODEL_BASE}/${tag}.onnx`
 
-  // Pre-flight: confirm the file exists before letting ORT hang on a 404.
+  // Pre-flight: confirm the file exists AND is actually ONNX binary.
+  // A SPA catch-all rewrite can silently return index.html (text/html) with
+  // a 200 status, which would hang InferenceSession.create as it tries to
+  // parse HTML as a model. Check content-type explicitly.
   const head = await fetch(url, { method: 'HEAD' })
   if (!head.ok) {
     throw new Error(
       `XGBoost model ${tag}.onnx not found (HTTP ${head.status}). ` +
       `Run: cd backend && python scripts/train_xgboost.py`
+    )
+  }
+  const ctype = head.headers.get('content-type') ?? ''
+  if (ctype.includes('text/html')) {
+    throw new Error(
+      `XGBoost ${tag}.onnx served as text/html — likely a Vercel SPA rewrite ` +
+      `is intercepting the model URL. Check vercel.json rewrites.`
     )
   }
 

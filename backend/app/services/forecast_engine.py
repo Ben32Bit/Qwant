@@ -426,13 +426,16 @@ def forecast_hmm(
     n_train = max(int(n * 0.8), 60)
     r_train = returns.iloc[:n_train].values.reshape(-1, 1)
 
-    # Multiple restarts to escape local optima (Rabiner, 1989)
+    # Multiple restarts to escape local optima (Rabiner, 1989).
+    # Budget: 3 restarts × 75 iters keeps wall time under ~10 s on Railway's
+    # shared CPU; Baum-Welch oscillates near the optimum so 200 iters rarely
+    # helps after 75. Looser tol (1e-3) avoids unnecessary late-stage churn.
     best_model = None
     best_score = -np.inf
-    for seed in range(10):
+    for seed in range(3):
         try:
             m = GaussianHMM(n_components=2, covariance_type="full",
-                            n_iter=200, random_state=seed, tol=1e-4)
+                            n_iter=75, random_state=seed, tol=1e-3)
             m.fit(r_train)
             score = m.score(r_train)
             if score > best_score:
@@ -1044,6 +1047,23 @@ def run_all_forecasts(req) -> dict:
 
     _hmm_out_extras: dict = {}   # populated during HMM dispatch for regime/ensemble
 
+    # Heavy server-side methods (HMM / GP) are independent — dispatch them
+    # concurrently via a thread pool so the slowest method doesn't starve the
+    # others within the client's 60 s Phase 2 budget.
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    PHASE2_SERVER_METHODS = {"hmm", "var"}
+    _pending_futures: dict = {}
+    _server_pool = ThreadPoolExecutor(max_workers=2)
+    for m in req.methods:
+        if m == "hmm":
+            _pending_futures["hmm"] = _server_pool.submit(
+                forecast_hmm, returns, h, np_, last_date, macro_ctx or None,
+            )
+        elif m == "var":
+            _pending_futures["var"] = _server_pool.submit(
+                forecast_gp, returns, h, last_date,
+            )
+
     results = []
     for method in req.methods:
         label = METHOD_LABELS.get(method, method)
@@ -1109,7 +1129,9 @@ def run_all_forecasts(req) -> dict:
 
             # ── Server-side methods: compute band directly ─────────────────────
             if method == "hmm":
-                out = forecast_hmm(returns, h, np_, last_date, macro_ctx or None)
+                # 25 s cap lets the client's 60 s budget still cover GP + LSTM
+                # feature prep + response serialisation on a slow worker.
+                out = _pending_futures["hmm"].result(timeout=25)
                 if trends_ctx:
                     out["metadata"]["trends_context"] = _portfolio_trends(trends_ctx, weights)
                 if news_ctx:
@@ -1134,7 +1156,7 @@ def run_all_forecasts(req) -> dict:
 
             elif method == "var":
                 # VAR key preserved for backward compat; computes Gaussian Process
-                out = forecast_gp(returns, h, last_date)
+                out = _pending_futures["var"].result(timeout=20)
                 if macro_ctx:
                     out["metadata"]["vix_pct_rank"]      = macro_ctx.get("vix_pct_rank")
                     out["metadata"]["vix_term_slope"]    = macro_ctx.get("vix_term_slope")
@@ -1151,6 +1173,13 @@ def run_all_forecasts(req) -> dict:
                 compute_ms=out.get("compute_ms", 0),
             ))
 
+        except FuturesTimeout:
+            logger.warning("Forecast method %s exceeded its server-side time budget", method)
+            results.append(MethodResult(
+                method=method, label=label, color=color,
+                error=f"{label} exceeded the server-side time budget — try a shorter backtest window",
+                status="error",
+            ))
         except Exception as e:
             logger.warning("Forecast method %s failed: %s", method, e)
             results.append(MethodResult(
@@ -1158,6 +1187,10 @@ def run_all_forecasts(req) -> dict:
                 error=str(e),
                 status="error",
             ))
+
+    # Threads are daemonic by default on 3.9+, but explicit shutdown keeps
+    # the interpreter from holding onto a stuck HMM fit beyond the response.
+    _server_pool.shutdown(wait=False, cancel_futures=True)
 
     tier2_summary = {
         "reddit":  _portfolio_reddit(reddit_ctx, weights) if reddit_ctx else None,

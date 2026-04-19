@@ -2,6 +2,65 @@
 
 ---
 
+## 2026-04-19 — Forecast round 3: Phase 2 parallelism + XGBoost SPA-rewrite fix
+
+**Root cause diagnosed from Railway logs (Phase 2 request 09:24:12 → 09:25:40,
+88 s total).** HMM alone ran 10 random restarts × 200 iters on ~2 000 training
+samples, which exceeded the client's 25 s abort timer. Since methods dispatched
+sequentially (`hmm` → `var` → `lstm`), GP and LSTM features never started before
+the client disconnected — all three appeared as errors.
+
+**Backend fixes (`backend/app/services/forecast_engine.py`):**
+- HMM: reduced to 3 restarts × 75 iters, tol 1e-3. Baum-Welch oscillates near
+  the optimum; 200 iters rarely helped and the `Model is not converging` log
+  spam confirmed the extra iters were wasted.
+- Phase 2 server methods (`hmm`, `var`) now dispatch to a `ThreadPoolExecutor`
+  at the top of `run_all_forecasts` so they run concurrently. Each future is
+  harvested inside the method loop with a hard timeout (25 s HMM, 20 s GP).
+- Added `FuturesTimeout` branch in the except chain so a slow method emits a
+  clear "exceeded the server-side time budget" error to the client.
+- Pool shutdown with `cancel_futures=True` after the loop.
+
+**Client fixes:**
+- `useForecast.js` Phase 2 abort extended from 25 s → 60 s to give the backend
+  room to breathe even with both HMM + GP running in parallel.
+- `XGBoostInferer.js` pre-flight now inspects `content-type` on the HEAD
+  response and fails loudly if the model URL returns `text/html` (symptom of a
+  SPA catch-all rewrite intercepting the path).
+
+**Vercel fix (`frontend/vercel.json`):**
+- Old SPA rewrite `/(.*) → /index.html` matched *every* path. Under certain
+  Vercel build configurations this intercepts static assets like
+  `/models/xgboost/q05.onnx`, returning `index.html` with `text/html` MIME —
+  which ORT then hangs on trying to parse as a binary model. That was the
+  actual cause of XGBoost stuck on "waiting…" despite the timeout commit.
+- New rewrite uses a negative-lookahead regex that excludes `/models/`,
+  `/assets/`, and common static extensions (`.onnx`, `.json`, `.wasm`, `.js`,
+  `.css`, images, fonts, `.bin`) from the SPA fallback.
+
+**On-the-fly training: confirmed NOT required.**
+All 6 methods fit on the user's equity curve at request time, but that's
+feature preparation / scaler fitting / small GP & HMM fits — no large model
+retraining. The 2 pre-trained ONNX/TF.js models (XGBoost, N-BEATS, LSTM) are
+shipped as static assets; they are never retrained at request time.
+
+**Files affected:**
+- `backend/app/services/forecast_engine.py` — HMM restart budget + parallel
+  ThreadPoolExecutor for Phase 2 + per-method timeouts
+- `frontend/src/hooks/useForecast.js` — Phase 2 timeout 25 s → 60 s
+- `frontend/src/ml/XGBoostInferer.js` — content-type check on pre-flight
+- `frontend/vercel.json` — exclude static assets from SPA catch-all rewrite
+
+**Expected outcome after deploy:**
+- HMM completes in ~10 s instead of 88 s
+- GP runs concurrently with HMM (saves another 5-10 s)
+- LSTM feature prep unblocked → LSTM rollout actually runs
+- XGBoost receives a real ONNX binary → client-side inference completes
+- If anything still fails, the user sees a specific error card instead of
+  "waiting…"
+
+---
+
 ## 2026-04-19 — Forecast round 2: Phase 2 failure visibility + XGBoost timeout
 
 Screenshot showed XGBoost / HMM / GP stuck on "waiting…" and LSTM on "error"

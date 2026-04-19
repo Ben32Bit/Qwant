@@ -147,7 +147,7 @@ export function useForecast(backtest, portfolio) {
     let p2FailReason = null
     try {
       const p2Controller = new AbortController()
-      const p2Timeout    = setTimeout(() => p2Controller.abort(), 25_000)
+      const p2Timeout    = setTimeout(() => p2Controller.abort(), 60_000)
       try {
         const res = await fetch('/api/forecast', {
           method: 'POST',
@@ -164,7 +164,7 @@ export function useForecast(backtest, portfolio) {
       }
     } catch (e) {
       p2FailReason = e.name === 'AbortError'
-        ? 'Phase 2 timed out after 25s'
+        ? 'Phase 2 timed out after 60s'
         : `Phase 2 error: ${e.message}`
       console.warn(p2FailReason)
     } finally {
