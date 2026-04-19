@@ -230,12 +230,14 @@
         },
         {
           "module": "keras.layers",
-          "class_name": "Softmax",
+          "class_name": "Reshape",
           "config": {
-            "name": "attn_softmax",
+            "name": "score_flat",
             "trainable": true,
             "dtype": "float32",
-            "axis": 1
+            "target_shape": [
+              60
+            ]
           },
           "registered_name": null,
           "build_config": {
@@ -245,11 +247,70 @@
               1
             ]
           },
-          "name": "attn_softmax",
+          "name": "score_flat",
           "inbound_nodes": [
             [
               [
                 "attn_v",
+                0,
+                0,
+                {}
+              ]
+            ]
+          ]
+        },
+        {
+          "module": "keras.layers",
+          "class_name": "Softmax",
+          "config": {
+            "name": "attn_softmax",
+            "trainable": true,
+            "dtype": "float32",
+            "axis": -1
+          },
+          "registered_name": null,
+          "build_config": {
+            "input_shape": [
+              null,
+              60
+            ]
+          },
+          "name": "attn_softmax",
+          "inbound_nodes": [
+            [
+              [
+                "score_flat",
+                0,
+                0,
+                {}
+              ]
+            ]
+          ]
+        },
+        {
+          "module": "keras.layers",
+          "class_name": "Reshape",
+          "config": {
+            "name": "alpha",
+            "trainable": true,
+            "dtype": "float32",
+            "target_shape": [
+              60,
+              1
+            ]
+          },
+          "registered_name": null,
+          "build_config": {
+            "input_shape": [
+              null,
+              60
+            ]
+          },
+          "name": "alpha",
+          "inbound_nodes": [
+            [
+              [
+                "attn_softmax",
                 0,
                 0,
                 {}
@@ -290,7 +351,7 @@
                 {}
               ],
               [
-                "attn_softmax",
+                "alpha",
                 0,
                 0,
                 {}
