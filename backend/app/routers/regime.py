@@ -9,8 +9,6 @@ the HMM on the last 252 trading days, cross-classifies with VIX, and
 returns regime probabilities + ensemble weight recommendations.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Optional
 
