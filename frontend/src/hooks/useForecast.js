@@ -178,21 +178,23 @@ export function useForecast(backtest, portfolio) {
     const lstmFeatures = lstmServerResult?.metadata?.lstm_features
 
     if (!lstmFeatures) {
+      const reason = p2FailReason ?? 'Server returned no LSTM feature bundle'
       if (p2Data) {
         setPhase2(p2 => p2 ? {
           ...p2,
           results: (p2.results ?? []).map(r => r.method !== 'lstm' ? r : {
-            ...r, error: 'Server returned no LSTM feature bundle',
+            ...r, error: reason,
           }),
         } : p2)
       } else {
+        // Phase 2 entirely failed — inject error entries for ALL three methods
+        // so they render as "error" instead of "waiting…"
         setPhase2({
-          results: [{
-            method: 'lstm',
-            label: 'Attention-LSTM',
-            color: '#ff4757',
-            error: p2FailReason ?? 'Phase 2 unavailable — LSTM skipped',
-          }],
+          results: [
+            { method: 'hmm',  label: 'HMM',              color: '#4a9eff', error: reason },
+            { method: 'var',  label: 'Gaussian Process', color: '#9c88ff', error: reason },
+            { method: 'lstm', label: 'Attention-LSTM',   color: '#ff4757', error: reason },
+          ],
         })
       }
       return

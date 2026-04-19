@@ -2,6 +2,37 @@
 
 ---
 
+## 2026-04-19 — Forecast round 2: Phase 2 failure visibility + XGBoost timeout
+
+Screenshot showed XGBoost / HMM / GP stuck on "waiting…" and LSTM on "error"
+after the Opus Fix_1 deploy. Two remaining failure paths fixed.
+
+**Bug A — Phase 2 failure left HMM + GP as "waiting…" forever.**
+`useForecast.js` only injected an LSTM error entry when the Phase 2 POST failed
+(timeout / 5xx). HMM + `var` were never present in `phase2.results`, so the UI
+rendered them as "waiting…" indefinitely. Fix: when Phase 2 returns no data,
+synthesize error entries for all three Phase 2 methods (`hmm`, `var`, `lstm`)
+with the same failure reason, so they render as red "error" cards instead of
+perpetual spinners.
+
+**Bug B — XGBoost client-side inference could hang silently.**
+`ort.InferenceSession.create` and `session.run` have no built-in promise
+timeouts; a malformed model, bad MIME type on the CDN, or wasm crash would
+leave the row stuck on "waiting…". Fix: added `withTimeout(promise, ms, label)`
+wrapper in `XGBoostInferer.js`. 15s for session load, 10s per quantile run.
+Errors propagate into the method's `error` field so the row renders as an
+explicit failure.
+
+**Files affected:**
+- `frontend/src/hooks/useForecast.js` — inject error entries for all 3 Phase 2 methods
+- `frontend/src/ml/XGBoostInferer.js` — Promise.race timeout on create + run
+
+**Current state:** All 6 forecast methods now fail loudly with a visible error
+message instead of hanging. Root cause of XGBoost hang (if it's Vercel MIME
+type or the ONNX export itself) is still unknown but the symptom is resolved.
+
+---
+
 ## 2026-04-19 — Fix: forecast critical bugs (Opus Fix_1 remediation)
 
 Applied all 6 priorities from the Opus Fix_1 remediation prompt.

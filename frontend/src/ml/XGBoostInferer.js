@@ -21,10 +21,23 @@ const MODEL_BASE    = '/models/xgboost'
 const META_URL      = `${MODEL_BASE}/meta.json`
 const HORIZON       = 252
 const PERIOD_DAYS   = 21
+const CREATE_TIMEOUT_MS = 15_000
+const RUN_TIMEOUT_MS    = 10_000
 
 let _ort      = null
 const _sessions = {}
 let _meta     = null
+
+function withTimeout(promise, ms, label) {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    )
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
 
 async function getOrt() {
   if (_ort) return _ort
@@ -66,7 +79,11 @@ async function getSession(tag) {
     )
   }
 
-  _sessions[tag] = await ort.InferenceSession.create(url, { executionProviders: ['wasm'] })
+  _sessions[tag] = await withTimeout(
+    ort.InferenceSession.create(url, { executionProviders: ['wasm'] }),
+    CREATE_TIMEOUT_MS,
+    `XGBoost ${tag}.onnx session load`,
+  )
   return _sessions[tag]
 }
 
@@ -87,7 +104,11 @@ async function predict21d(features) {
   for (const tag of QUANTILE_TAGS) {
     const session = await getSession(tag)
     const tensor  = new ort.Tensor('float32', floatArr, [1, features.length])
-    const output  = await session.run({ float_input: tensor })
+    const output  = await withTimeout(
+      session.run({ float_input: tensor }),
+      RUN_TIMEOUT_MS,
+      `XGBoost ${tag} inference`,
+    )
     const val = output.variable?.data[0] ?? output[Object.keys(output)[0]].data[0]
     results[tag] = Number(val)
   }
