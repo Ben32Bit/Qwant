@@ -1348,3 +1348,45 @@ npm run dev
 - [ ] Return distribution histogram
 - [ ] Rate limiting
 - [ ] Mobile layout
+
+---
+
+## 2026-04-19 — Forecast remediation round 7: Per-method horizon caps + ensemble degradation indicator
+
+**Context:** XGBoost is trained on a 21-day quantile regressor and extrapolated to 252d via √t scaling; N-BEATS stacks twelve 21-day recursive predictions where error compounds. Projecting either to a full year is academically dishonest. User asked to cap short-horizon models at their training horizon and surface how the ensemble "degrades" as fewer models contribute.
+
+**Decision (per-method horizon caps):**
+- XGBoost: cap at 21 trading days (its actual trained target; no √t extrapolation beyond that).
+- N-BEATS: cap at 63 trading days (~3 × 21-day recursive periods — error still tolerable).
+- Factor / HMM / GP / LSTM: keep the full 252d horizon. These simulate the full path directly (HMM / GP / LSTM stochastic simulation, Factor closed-form), so 252d is legitimate.
+- Global horizon reduction rejected — would throw away the long-horizon models' entire contribution.
+
+**Frontend changes:**
+
+- `frontend/src/hooks/useForecast.js`
+  - Exported `HORIZON_CAPS_DAYS = { xgboost: 21, nbeats: 63 }`.
+  - Added `capBand(band, maxDays)` helper that trims `dates/p5/p25/p50/p75/p95` arrays.
+  - Applied `capBand` to XGBoost and N-BEATS bands in the `.then(band => ...)` handlers before they land in `phase1`. N-BEATS' `periods` metadata now reflects the capped horizon rather than a hard-coded 12.
+
+- `frontend/src/ml/MetaEnsemble.js::blendBands`
+  - Rewrote the weighted blend to be **per-timestep**. Previously when a method's band was shorter than the ensemble horizon we used `arr[t] ?? arr.at(-1)`, which carries forward a stale last value indefinitely — so a 21-day XGBoost forecast "voted" at day 200 with its day-21 value. Now we build `activeMethodsPerT` sets and only sum over methods that have a finite value at that timestep, renormalising the denominator per t. If no method is active, the ensemble value is `null` (gaps render correctly).
+  - Return value adds `modelCounts: number[]` and `activeMethodsPerT: string[][]` for downstream visualisation.
+
+- `frontend/src/components/Dashboard/ForecastComposite.jsx`
+  - Added two new `ReferenceLine`s on the chart at the XGBoost cap date (label `n→5 · 21d`, blue) and N-BEATS cap date (label `n→4 · 63d`, yellow). Colour matches each method's line so the "who's dropping out" mapping is self-evident.
+  - Added an `EnsembleDegradationStrip` footer below the chart: a proportional 3-segment bar showing `6 models → 5 models → 4 models` with widths matching the day ranges (so the 21-day XGBoost segment is ~8% of the bar, honestly small). Each segment is tinted and labelled; tooltip gives the cap date.
+  - Cap dates are resolved by picking the longest available forecast-date array (usually Factor's 252d) and indexing into `HORIZON_CAPS_DAYS.xgboost - 1` and `HORIZON_CAPS_DAYS.nbeats - 1`.
+
+**Files affected:**
+- `frontend/src/hooks/useForecast.js`
+- `frontend/src/ml/MetaEnsemble.js`
+- `frontend/src/components/Dashboard/ForecastComposite.jsx`
+
+**Current state:**
+- Build passes (`npm run build` → `built in 8.43s`).
+- XGBoost/N-BEATS lines now visibly end at their training horizon instead of snaking to 12 months. Ensemble line continues through, but with renormalised weights in each segment.
+- Chart shows exactly where each model drops out; degradation strip communicates the model-count trajectory at a glance.
+
+**Pending:**
+- [ ] Live smoke test on Vercel (verify capped bands render correctly and ensemble line doesn't develop a visible kink at cap boundaries).
+- [ ] Retrain XGBoost/N-BEATS on longer horizons if we decide the 21d cap is too restrictive for the composite view.

@@ -145,21 +145,31 @@ export function blendBands(results, weights, disagreement) {
   const T = dates.length
   const ensemble = {}
 
-  for (const q of QUANTILES) {
-    ensemble[q] = new Array(T).fill(0)
-    let totalW = 0
-    for (const [method, band] of Object.entries(bands)) {
-      const w = weights[method] ?? 0
-      if (!w || !band[q]?.length) continue
-      const arr = band[q]
-      for (let t = 0; t < T; t++) {
-        ensemble[q][t] += w * (arr[t] ?? arr.at(-1) ?? 0)
-      }
-      totalW += w
+  // Per-timestep active method set — drives weight renormalization AND the
+  // model-count trajectory we expose for the "ensemble degradation" indicator.
+  // A method's contribution ends at its band length (horizon caps live in
+  // useForecast), not at a NaN carry-forward.
+  const activeMethodsPerT = Array.from({ length: T }, () => [])
+  for (const [method, band] of Object.entries(bands)) {
+    const len = Math.min(band.dates?.length ?? 0, T)
+    for (let t = 0; t < len; t++) {
+      if (Number.isFinite(band.p50?.[t])) activeMethodsPerT[t].push(method)
     }
-    // Renormalize if some methods were missing quantile data
-    if (totalW > 0 && totalW < 1) {
-      for (let t = 0; t < T; t++) ensemble[q][t] /= totalW
+  }
+
+  for (const q of QUANTILES) {
+    ensemble[q] = new Array(T).fill(null)
+    for (let t = 0; t < T; t++) {
+      let num = 0, den = 0
+      for (const method of activeMethodsPerT[t]) {
+        const w = weights[method] ?? 0
+        const v = bands[method][q]?.[t]
+        if (w > 0 && Number.isFinite(v)) {
+          num += w * v
+          den += w
+        }
+      }
+      ensemble[q][t] = den > 0 ? num / den : null
     }
   }
 
@@ -170,18 +180,21 @@ export function blendBands(results, weights, disagreement) {
   if (disagFactor > 0) {
     const sigma = Math.sqrt(disagreement.variance)
     for (let t = 0; t < T; t++) {
-      ensemble.p5[t]  -= disagFactor * sigma
-      ensemble.p95[t] += disagFactor * sigma
+      if (ensemble.p5[t]  != null) ensemble.p5[t]  -= disagFactor * sigma
+      if (ensemble.p95[t] != null) ensemble.p95[t] += disagFactor * sigma
     }
   }
 
+  const round4 = v => v == null ? null : +v.toFixed(4)
   return {
     dates,
-    p5:  ensemble.p5.map(v => +v.toFixed(4)),
-    p25: ensemble.p25.map(v => +v.toFixed(4)),
-    p50: ensemble.p50.map(v => +v.toFixed(4)),
-    p75: ensemble.p75.map(v => +v.toFixed(4)),
-    p95: ensemble.p95.map(v => +v.toFixed(4)),
+    p5:  ensemble.p5.map(round4),
+    p25: ensemble.p25.map(round4),
+    p50: ensemble.p50.map(round4),
+    p75: ensemble.p75.map(round4),
+    p95: ensemble.p95.map(round4),
+    modelCounts:  activeMethodsPerT.map(a => a.length),
+    activeMethodsPerT,
   }
 }
 

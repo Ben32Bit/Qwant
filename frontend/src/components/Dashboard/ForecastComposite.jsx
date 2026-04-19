@@ -9,6 +9,10 @@ const METHOD_ORDER  = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
 const METHOD_LABELS = { xgboost: 'XGBoost', nbeats: 'N-BEATS', factor: 'Factor', hmm: 'HMM', var: 'GP', lstm: 'LSTM' }
 const METHOD_COLORS = { xgboost: '#4a9eff', nbeats: '#ffd43b', factor: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757' }
 
+// Horizon caps drive the segmented "model count" strip + chart reference
+// lines. Kept in sync with HORIZON_CAPS_DAYS in useForecast.js.
+const HORIZON_CAPS_DAYS = { xgboost: 21, nbeats: 63 }
+
 function fmtVal(v) {
   if (v == null) return '—'
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`
@@ -190,6 +194,52 @@ function MethodEffectivenessTable({ results, ensemble }) {
  * Forecast values are computed as:
  *   projected_value = last_historical_value × (1 + p50_pct_return / 100)
  */
+// Small footer strip visualising how the ensemble's active-model count
+// degrades past each horizon cap. Segments are proportional to the day
+// ranges; width reflects that XGBoost only covers 21/252 ≈ 8% of the axis.
+function EnsembleDegradationStrip({ capDates, forecastHorizon }) {
+  if (!forecastHorizon) return null
+  const segs = [
+    { label: '6 models', end: HORIZON_CAPS_DAYS.xgboost, tone: 'var(--accent-green)' },
+    { label: '5 models', end: HORIZON_CAPS_DAYS.nbeats,  tone: '#ffd43b' },
+    { label: '4 models', end: forecastHorizon,           tone: '#ff6b35' },
+  ]
+  let prevEnd = 0
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-1 mb-1">
+        <span className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)', opacity: 0.6 }}>
+          ENSEMBLE ACTIVE MODELS
+        </span>
+        <span className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)', opacity: 0.4 }}>
+          · degrades as short-horizon models hit their training cap
+        </span>
+      </div>
+      <div className="flex items-stretch rounded overflow-hidden" style={{ height: 14, border: '1px solid var(--border)' }}>
+        {segs.map((s, i) => {
+          const span = Math.max(0, s.end - prevEnd)
+          const pct  = (span / forecastHorizon) * 100
+          prevEnd = s.end
+          if (pct < 1) return null
+          return (
+            <div key={i} className="flex items-center justify-center mono"
+              style={{ width: `${pct}%`, background: `${s.tone}22`, borderRight: i < segs.length - 1 ? `1px solid ${s.tone}` : 'none', fontSize: 8, color: s.tone, fontWeight: 700 }}
+              title={`${s.label}, up to day ${s.end} (${capDates[i] ?? '—'})`}>
+              {pct > 12 ? s.label : s.label.split(' ')[0]}
+            </div>
+          )
+        })}
+      </div>
+      <div className="flex mono" style={{ fontSize: 8, color: 'var(--text-secondary)', opacity: 0.5, marginTop: 2 }}>
+        <span style={{ width: `${(HORIZON_CAPS_DAYS.xgboost / forecastHorizon) * 100}%` }}>0d</span>
+        <span style={{ width: `${((HORIZON_CAPS_DAYS.nbeats - HORIZON_CAPS_DAYS.xgboost) / forecastHorizon) * 100}%` }}>{HORIZON_CAPS_DAYS.xgboost}d</span>
+        <span style={{ flex: 1 }}>{HORIZON_CAPS_DAYS.nbeats}d</span>
+        <span style={{ textAlign: 'right' }}>{forecastHorizon}d</span>
+      </div>
+    </div>
+  )
+}
+
 export default function ForecastComposite({ results, equityCurve, forecastStart, loading, ensemble }) {
   const chartData = useMemo(() => {
     if (!equityCurve?.length) return []
@@ -234,6 +284,24 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
     : []
 
   const activeResults = (results ?? []).filter(r => r.forecast)
+
+  // Longest available forecast-date array — used to resolve cap-day offsets
+  // into calendar dates for the ReferenceLines and to size the degradation
+  // strip proportionally.
+  const forecastDates = useMemo(() => {
+    const longest = (results ?? [])
+      .map(r => r.forecast?.dates)
+      .filter(d => d?.length)
+      .reduce((a, b) => (a && a.length >= b.length ? a : b), null)
+    return longest ?? ensemble?.band?.dates ?? []
+  }, [results, ensemble])
+
+  const forecastHorizon = forecastDates.length
+  const capDates = [
+    forecastDates[HORIZON_CAPS_DAYS.xgboost - 1],
+    forecastDates[HORIZON_CAPS_DAYS.nbeats  - 1],
+    forecastDates[forecastDates.length - 1],
+  ]
 
   if (loading && !activeResults.length) {
     return (
@@ -296,6 +364,27 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
               label={{ value: 'Forecast', position: 'insideTopRight', fontSize: 9, fill: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}
             />
           )}
+          {/* Cap markers — XGBoost (21d) and N-BEATS (63d) — so users can
+              see exactly where each short-horizon model drops out and the
+              ensemble downshifts to fewer contributors. */}
+          {capDates[0] && (
+            <ReferenceLine
+              x={capDates[0]}
+              stroke="rgba(74,158,255,0.35)"
+              strokeDasharray="2 3"
+              strokeWidth={1}
+              label={{ value: 'n→5 · 21d', position: 'insideTopLeft', fontSize: 8, fill: 'rgba(74,158,255,0.7)', fontFamily: 'monospace' }}
+            />
+          )}
+          {capDates[1] && (
+            <ReferenceLine
+              x={capDates[1]}
+              stroke="rgba(255,212,59,0.35)"
+              strokeDasharray="2 3"
+              strokeWidth={1}
+              label={{ value: 'n→4 · 63d', position: 'insideTopLeft', fontSize: 8, fill: 'rgba(255,212,59,0.7)', fontFamily: 'monospace' }}
+            />
+          )}
           <Tooltip content={<CompositeTooltip />} />
           <Legend
             wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: 'var(--text-secondary)' }}
@@ -347,6 +436,8 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
           )}
         </ComposedChart>
       </ResponsiveContainer>
+
+      <EnsembleDegradationStrip capDates={capDates} forecastHorizon={forecastHorizon} />
     </div>
   )
 }

@@ -3,6 +3,29 @@ import { useState, useCallback, useRef } from 'react'
 const PHASE1_METHODS = ['xgboost', 'nbeats', 'factor']
 const PHASE2_METHODS = ['hmm', 'var', 'lstm']
 
+// Per-method horizon caps (trading days). Methods trained on a short target
+// shouldn't masquerade as full-year forecasters — XGBoost's 21-day quantile
+// regressor extrapolates to 252d via √t scaling (heuristic, not earned), and
+// N-BEATS stacks twelve 21-day recursive predictions (error compounds fast).
+// Factor / HMM / GP / LSTM simulate the full path directly, so they run the
+// full horizon. Truncating here also drives the ensemble's "model count"
+// degradation past each cap.
+export const HORIZON_CAPS_DAYS = { xgboost: 21, nbeats: 63 }
+
+function capBand(band, maxDays) {
+  if (!band?.dates?.length || !maxDays) return band
+  const cap = Math.min(band.dates.length, maxDays)
+  if (cap === band.dates.length) return band
+  return {
+    dates: band.dates.slice(0, cap),
+    p5:    band.p5?.slice(0, cap),
+    p25:   band.p25?.slice(0, cap),
+    p50:   band.p50?.slice(0, cap),
+    p75:   band.p75?.slice(0, cap),
+    p95:   band.p95?.slice(0, cap),
+  }
+}
+
 export function useForecast(backtest, portfolio) {
   const [phase1, setPhase1] = useState(null)
   const [phase2, setPhase2] = useState(null)
@@ -90,10 +113,11 @@ export function useForecast(backtest, portfolio) {
               .then(band => {
                 const xgbMs = Date.now() - (xgbStart.current ?? Date.now())
                 setTiming(t => ({ ...t, xgbMs }))
+                const capped = capBand(band, HORIZON_CAPS_DAYS.xgboost)
                 setPhase1(p1 => p1 ? {
                   ...p1,
                   results: p1.results.map(r => r.method !== 'xgboost' ? r : {
-                    ...r, forecast: band, compute_ms: xgbMs,
+                    ...r, forecast: capped, compute_ms: xgbMs,
                     metadata: {
                       oos_r2: xgb_features.oos_r2 ?? null,
                       ret_21d_ann: xgb_features.ret_21d_ann,
@@ -145,15 +169,16 @@ export function useForecast(backtest, portfolio) {
             .then(band => {
               const nbeatsMs = Date.now() - (nbeatsStart.current ?? Date.now())
               setTiming(t => ({ ...t, nbeatsMs }))
+              const capped = capBand(band, HORIZON_CAPS_DAYS.nbeats)
               setPhase1(p1 => p1 ? {
                 ...p1,
                 results: p1.results.map(r => r.method !== 'nbeats' ? r : {
-                  ...r, forecast: band, compute_ms: nbeatsMs,
+                  ...r, forecast: capped, compute_ms: nbeatsMs,
                   metadata: {
                     vol_21d_ann: nbeats_features.vol_21d_ann,
                     ret_21d:     nbeats_features.ret_21d,
                     n_obs:       nbeats_features.n_obs,
-                    periods:     12,
+                    periods:     Math.ceil(HORIZON_CAPS_DAYS.nbeats / 21),
                     client_side: false,
                   },
                 }),
