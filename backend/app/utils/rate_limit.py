@@ -32,5 +32,5 @@ GLOBAL_LIMIT = os.getenv("GLOBAL_RATE_LIMIT",  "300/hour")
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[GLOBAL_LIMIT],
-    headers_enabled=True,   # sends X-RateLimit-Limit / X-RateLimit-Remaining headers
+    headers_enabled=False,
 )
