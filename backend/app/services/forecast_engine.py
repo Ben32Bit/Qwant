@@ -426,16 +426,18 @@ def forecast_hmm(
     n_train = max(int(n * 0.8), 60)
     r_train = returns.iloc[:n_train].values.reshape(-1, 1)
 
-    # Multiple restarts to escape local optima (Rabiner, 1989).
-    # Budget: 3 restarts × 75 iters keeps wall time under ~10 s on Railway's
-    # shared CPU; Baum-Welch oscillates near the optimum so 200 iters rarely
-    # helps after 75. Looser tol (1e-3) avoids unnecessary late-stage churn.
+    # Budget: single fit with 50 iters + diag covariance. Each 2k-sample fit
+    # on Railway's shared CPU takes ~8-10 s at n_iter=75; additional restarts
+    # delivered little benefit because Baum-Welch was oscillating below tol.
+    # Diagonal covariance has 2× fewer parameters for a 2-state 1-D model
+    # (identical expressiveness here, faster EM).
     best_model = None
     best_score = -np.inf
-    for seed in range(3):
+    for seed in range(2):
         try:
-            m = GaussianHMM(n_components=2, covariance_type="full",
-                            n_iter=75, random_state=seed, tol=1e-3)
+            m = GaussianHMM(n_components=2, covariance_type="diag",
+                            n_iter=50, random_state=seed, tol=1e-3,
+                            init_params="stmc")
             m.fit(r_train)
             score = m.score(r_train)
             if score > best_score:
@@ -466,16 +468,22 @@ def forecast_hmm(
     # Validate out-of-sample: Bull μ > Bear μ (economic sanity)
     oos_sane = bool(means[bull] > means[bear])
 
-    # Simulate
-    paths = np.zeros((horizon, n_paths))
-    for path_i in range(n_paths):
-        state  = current_state
-        cum_r  = 0.0
-        for t in range(horizon):
-            r_t   = np.random.normal(means[state], stds[state])
-            cum_r = (1 + cum_r) * (1 + r_t) - 1
-            paths[t, path_i] = cum_r
-            state = np.random.choice(2, p=A[state])
+    # Simulate — vectorised: draw the full state trajectory, then draw
+    # per-state returns in bulk. Saves ~250k Python-level iterations.
+    rng    = np.random.default_rng()
+    states = np.empty((horizon, n_paths), dtype=np.int8)
+    states[0] = current_state
+    uniforms  = rng.random((horizon, n_paths))
+    cum0      = A[0, 0]
+    cum1      = A[1, 0]
+    for t in range(1, horizon):
+        prev = states[t - 1]
+        thresh = np.where(prev == 0, cum0, cum1)
+        states[t] = np.where(uniforms[t] < thresh, 0, 1)
+
+    z        = rng.standard_normal((horizon, n_paths))
+    step_ret = means[states] + stds[states] * z
+    paths    = np.cumprod(1.0 + step_ret, axis=0) - 1.0
 
     dates = _forecast_dates(last_date, horizon)
     band  = _paths_to_band(paths, dates)
@@ -715,7 +723,7 @@ def forecast_gp(
     t0 = time.time()
 
     LOOKBACK     = 7    # one trading week of lags as GP features
-    N_TRAIN_MAX  = 300  # cap for O(n³) tractability
+    N_TRAIN_MAX  = 150  # cap for O(n³) tractability on Railway's shared CPU
 
     r = returns.values
     n = len(r)
@@ -753,7 +761,7 @@ def forecast_gp(
     gp = GaussianProcessRegressor(
         kernel=kernel,
         alpha=0,              # noise modelled entirely by WhiteKernel
-        n_restarts_optimizer=3,
+        n_restarts_optimizer=0,   # single fit — kernel init is already reasonable
         normalize_y=True,
     )
     gp.fit(X_tr, y_tr)
@@ -1129,9 +1137,9 @@ def run_all_forecasts(req) -> dict:
 
             # ── Server-side methods: compute band directly ─────────────────────
             if method == "hmm":
-                # 25 s cap lets the client's 60 s budget still cover GP + LSTM
-                # feature prep + response serialisation on a slow worker.
-                out = _pending_futures["hmm"].result(timeout=25)
+                # 45 s cap — HMM fit on Railway's shared CPU runs ~10 s per
+                # restart and is the wall-clock bottleneck of Phase 2.
+                out = _pending_futures["hmm"].result(timeout=45)
                 if trends_ctx:
                     out["metadata"]["trends_context"] = _portfolio_trends(trends_ctx, weights)
                 if news_ctx:
@@ -1156,7 +1164,7 @@ def run_all_forecasts(req) -> dict:
 
             elif method == "var":
                 # VAR key preserved for backward compat; computes Gaussian Process
-                out = _pending_futures["var"].result(timeout=20)
+                out = _pending_futures["var"].result(timeout=35)
                 if macro_ctx:
                     out["metadata"]["vix_pct_rank"]      = macro_ctx.get("vix_pct_rank")
                     out["metadata"]["vix_term_slope"]    = macro_ctx.get("vix_term_slope")

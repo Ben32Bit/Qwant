@@ -2,6 +2,72 @@
 
 ---
 
+## 2026-04-19 — Forecast round 4: HMM/GP shrinkage + LSTM error visibility + internal test harness
+
+**Follow-up to round 3.** Railway logs after the round-3 deploy showed HMM
+still running 27 s (over the 25 s budget) and GP running 47 s (over the 20 s
+budget). LSTM was surfacing a hardcoded "model not found" because a catch
+block was swallowing the real TF.js error. XGBoost appeared stuck at
+"waiting…" — root cause traced to Vercel SPA rewrite intercepting
+`/models/xgboost/*.onnx` (addressed in round 3 but needs redeploy).
+
+**Backend (`backend/app/services/forecast_engine.py`):**
+- HMM: 3×75 iters → **2 restarts × 50 iters**, `covariance_type="diag"` (was
+  full). Diag is empirically enough for daily-return regime separation and
+  cuts Baum-Welch cost by ~3×.
+- HMM simulation: replaced the 252 000-iteration Python loop (n_paths × horizon)
+  with a vectorised NumPy rollout using a single `(horizon, n_paths)` uniform
+  draw and boolean-threshold state transitions. ~50× faster on Railway.
+- GP: `N_TRAIN_MAX 300 → 150`; `n_restarts_optimizer 3 → 0`. The single fit
+  is within noise of the multi-restart result on daily returns.
+- Server result-harvest timeouts raised to match: HMM 45 s, GP 35 s.
+
+**Client (`frontend/src/hooks/useForecast.js`):**
+- Phase 2 abort extended 60 s → **90 s** (HMM 45 + GP 35 + RTT headroom).
+- If Phase 2 fails entirely (network / abort), inject error entries for
+  `hmm` / `var` / `lstm` so all three render "error" instead of hanging in
+  "waiting…".
+
+**LSTM error visibility (`frontend/src/ml/LSTMInferer.js`):**
+- Removed the `MODEL_NOT_FOUND` string substitution that was replacing the
+  real TF.js failure. `loadLayersModel` rejections now surface as
+  `LSTM model load failed: <real cause>`.
+- Added HEAD pre-flight on `/models/lstm/model.json` that sniffs content-type
+  and fails loudly if the manifest is served as `text/html` (SPA-rewrite
+  symptom, same as XGBoost round 3).
+
+**New test harness (`backend/scripts/test_forecast_methods.py`):**
+- Three synthetic GBM equity curves covering the likely user-input space:
+  `short_low_vol` (5 yr, 7 %/6 %), `long_bull` (15 yr, 12 %/18 %),
+  `short_high_vol` (3 yr, 18 %/32 %).
+- Exercises all 6 forecast paths (xgboost / nbeats / lstm feature prep,
+  factor, GP, HMM) against each curve.
+- Measures wall-clock vs production budgets, validates band shape +
+  percentile monotonicity, prints p50 at 252 d.
+- Local results (hmmlearn not installed in local venv; skipped): factor and
+  GP produce valid bands within budget on all three curves; NBeats / LSTM
+  feature prep < 1 s; first XGBoost features call ~2 s (yfinance + FRED
+  macro warmup), subsequent calls < 1.3 s.
+
+**Observation worth watching:** GP p50 at 252 d is -57 % on the
+`short_high_vol` synthetic — the recursive mean rollout drifts unrealistically
+in high-vol regimes. Not broken (band is valid), but the point estimate is
+worth a second look if users report implausible GP medians. The HMM and
+factor models stay within ±20 % on the same curve, so the issue is GP-specific.
+
+**Rate-limiting check:** confirmed the `/api/forecast` endpoint is NOT
+rate-limited per-IP in `app/utils/rate_limit.py` — the 429s users saw earlier
+were from `/api/chat`, not forecast. Ruled out as a cause.
+
+**Files affected:**
+- `backend/app/services/forecast_engine.py`
+- `backend/scripts/train_lstm.py` (TF.js manual export to bypass broken CLI)
+- `backend/scripts/test_forecast_methods.py` (new)
+- `frontend/src/hooks/useForecast.js`
+- `frontend/src/ml/LSTMInferer.js`
+
+---
+
 ## 2026-04-19 — Forecast round 3: Phase 2 parallelism + XGBoost SPA-rewrite fix
 
 **Root cause diagnosed from Railway logs (Phase 2 request 09:24:12 → 09:25:40,

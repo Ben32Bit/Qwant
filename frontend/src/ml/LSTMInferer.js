@@ -13,10 +13,9 @@
  * MinMaxScaler the server fit.
  */
 
-const MODEL_URL       = '/models/lstm/model.json'
-const N_MC_PASSES     = 200
-const MODEL_NOT_FOUND = `Attention-LSTM model not found at ${MODEL_URL}. Run: cd backend && python scripts/train_lstm.py`
-const TRADING_DAYS    = 252
+const MODEL_URL    = '/models/lstm/model.json'
+const N_MC_PASSES  = 200
+const TRADING_DAYS = 252
 
 // Feature order must match server's prepare_lstm_features exactly:
 //   [r, vol_21d, mom_5d, mom_21d, rsi_14]
@@ -31,10 +30,25 @@ async function getModel() {
     _tf = await import('@tensorflow/tfjs')
     await _tf.ready()
   }
+  // Pre-flight: sniff the JSON manifest before letting TF.js swallow the cause
+  const headRes = await fetch(MODEL_URL, { method: 'HEAD' })
+  if (!headRes.ok) {
+    throw new Error(
+      `LSTM model manifest not reachable (HTTP ${headRes.status} at ${MODEL_URL}). ` +
+      `Run: cd backend && python scripts/train_lstm.py`
+    )
+  }
+  const ctype = headRes.headers.get('content-type') ?? ''
+  if (ctype.includes('text/html')) {
+    throw new Error(
+      `LSTM manifest served as text/html — a SPA rewrite is intercepting ${MODEL_URL}. ` +
+      `Check vercel.json rewrites.`
+    )
+  }
   try {
     _model = await _tf.loadLayersModel(MODEL_URL)
   } catch (err) {
-    throw new Error(MODEL_NOT_FOUND)
+    throw new Error(`LSTM model load failed: ${err?.message ?? err}`)
   }
   return _model
 }
