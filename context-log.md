@@ -2,6 +2,78 @@
 
 ---
 
+## 2026-04-19 — Fix: forecast critical bugs (Opus Fix_1 remediation)
+
+Applied all 6 priorities from the Opus Fix_1 remediation prompt.
+
+**Priority 1 (CRITICAL) — hmm/factor/var results never returned:**
+`run_all_forecasts` loop computed `out` for hmm, factor, var but fell off
+the `try` block without calling `results.append`. Three server-side methods
+were silently dropped from every response. Fixed with a shared append path
+at the bottom of the `try` block using `ForecastBand(**out["band"])`.
+Also removed stale `monte_carlo`/`garch` from default methods list and docstring.
+
+**Priority 3 — XGBoost hangs silently on missing models:**
+`XGBoostInferer.js` now HEAD-checks each `.onnx` URL before creating an
+`InferenceSession`. Previously a 404 caused ORT to hang indefinitely.
+Also validates `features.length === meta.n_features` for loud mismatch errors.
+
+**Priority 4 — broken deriveLstmFeatures fallback removed:**
+`deriveLstmFeatures` returned a 1D array; `LSTMInferer` expects 60×5 2D —
+guaranteed crash on every invocation. Removed entirely. If Phase 2 fails,
+LSTM now shows a visible error row instead of silently disappearing.
+Also removed `lstmStandalone` state (no longer needed).
+
+**Priority 4+5 — LSTM rollout feature freeze fixed:**
+`prepare_lstm_features` now emits `raw_return_seed` (last 64 unscaled
+returns). `LSTMInferer` maintains a per-pass raw return buffer and rebuilds
+all 5 features (vol_21d, mom_5d, mom_21d, rsi_14) each rollout step.
+Previous code froze features 1-4 at seed values for the entire 252-day horizon
+— mathematically invalid after day 1.
+
+**Priority 6 — MethodResult.status + always-render all rows:**
+Added `status: Literal["ok","error","skipped"]` field to `MethodResult`.
+Removed `.filter(row => row.r || row.w != null)` from `MethodEffectivenessTable`
+so all 6 method rows always render even when a method errors.
+
+**Files:**
+- `backend/app/services/forecast_engine.py` — loop fix + prepare_lstm_features
+- `backend/app/models/forecast.py` — default methods, status field
+- `backend/app/routers/forecast.py` — docstring update
+- `frontend/src/hooks/useForecast.js` — remove deriveLstmFeatures, wire rawReturnSeed
+- `frontend/src/ml/LSTMInferer.js` — correct 252-day feature rollout
+- `frontend/src/ml/XGBoostInferer.js` — HEAD pre-flight + feature count validation
+- `frontend/src/components/Dashboard/ForecastComposite.jsx` — remove row filter
+
+**Model artefacts verified present:** all 10 files in `frontend/public/models/`
+(xgboost ×6, nbeats ×2, lstm ×2).
+
+---
+
+## 2026-04-19 — Fix: slowapi 500 on all rate-limited endpoints
+
+`headers_enabled=True` in the shared limiter caused slowapi to try injecting
+`X-RateLimit-*` headers into the raw dict return value before FastAPI
+serialises it, raising `parameter 'response' must be an instance of
+starlette.responses.Response` on every request. All endpoints returned 500.
+Fix: set `headers_enabled=False`. Rate limits are still enforced; only the
+response headers advertising them are gone.
+
+**Files:** `backend/app/utils/rate_limit.py`
+
+---
+
+## 2026-04-19 — Fix Railway crash: from __future__ import annotations in regime.py
+
+`from __future__ import annotations` makes all type hints lazy strings. When
+`@limiter.limit(CMPT_LIMITS)` wraps the handler, the wrapper loses module
+globals so pydantic can't resolve `'RegimeRequest'` back to the class at
+startup — crash before the first request. Fix: remove the import.
+
+**Files:** `backend/app/routers/regime.py`
+
+---
+
 ## 2026-04-19 — Fix: rate limits too tight (10/hour blocked normal use)
 
 10/hour = one AI request every 6 minutes — fine for a strict bot block but
