@@ -97,6 +97,23 @@ async function getSession(tag) {
   return _sessions[tag]
 }
 
+// ONNX Runtime Web sometimes throws a raw number (a WASM memory pointer)
+// when the model's ONNX opset is beyond what this ort-web build supports,
+// or when an internal op fails. Wrap those into a diagnostic message so
+// users see something they can act on instead of "XGBoost: 8667456".
+function describeOrtError(e, stage) {
+  if (typeof e === 'number') {
+    return new Error(
+      `ORT WASM error code ${e} during ${stage}. Likely cause: ONNX model ` +
+      `uses an opset beyond what the pinned onnxruntime-web build supports. ` +
+      `Either bump the CDN pin in index.html or re-export train_xgboost.py ` +
+      `with target_opset={'': 18, 'ai.onnx.ml': 3}.`,
+    )
+  }
+  if (e instanceof Error) return e
+  return new Error(`ORT error during ${stage}: ${String(e)}`)
+}
+
 async function predict21d(features) {
   const ort  = await getOrt()
   const meta = await loadMeta()
@@ -112,13 +129,23 @@ async function predict21d(features) {
   const floatArr = new Float32Array(features)
   const results  = {}
   for (const tag of QUANTILE_TAGS) {
-    const session = await getSession(tag)
+    let session
+    try {
+      session = await getSession(tag)
+    } catch (e) {
+      throw describeOrtError(e, `${tag} session load`)
+    }
     const tensor  = new ort.Tensor('float32', floatArr, [1, features.length])
-    const output  = await withTimeout(
-      session.run({ float_input: tensor }),
-      RUN_TIMEOUT_MS,
-      `XGBoost ${tag} inference`,
-    )
+    let output
+    try {
+      output = await withTimeout(
+        session.run({ float_input: tensor }),
+        RUN_TIMEOUT_MS,
+        `XGBoost ${tag} inference`,
+      )
+    } catch (e) {
+      throw describeOrtError(e, `${tag} run`)
+    }
     const val = output.variable?.data[0] ?? output[Object.keys(output)[0]].data[0]
     results[tag] = Number(val)
   }

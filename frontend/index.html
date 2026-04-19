@@ -14,8 +14,11 @@
   </head>
   <body>
     <div id="root"></div>
-    <!-- onnxruntime-web loaded from CDN so Vite/Rollup doesn't try to bundle WASM -->
-    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+    <!-- onnxruntime-web loaded from CDN so Vite/Rollup doesn't try to bundle WASM.
+         Pinned to 1.22.0 — supports ai.onnx opset 22 / IR v10 that skl2onnx's
+         current default export produces. 1.20.x throws raw WASM memory pointers
+         (e.g. "XGBoost: 8667456") when asked to load IR v10 models. -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

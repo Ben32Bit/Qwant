@@ -287,16 +287,39 @@ def export_model_to_onnx(model, n_features: int, out_path: Path):
     Requires skl2onnx >= 1.14 for HistGBR support.
     XGBoostInferer.js passes raw (unscaled) features — HGBR uses histogram
     binning internally so no StandardScaler is needed in the graph.
+
+    Opset targets MUST match onnxruntime-web's supported range. onnxruntime-web
+    1.20.1 (pinned via CDN in frontend/index.html) supports:
+      - ai.onnx         up to opset 20  (IR version 9)
+      - ai.onnx.ml      up to opset 3
+
+    Default skl2onnx converts targets the latest opset (22+ / IR 10), which
+    onnxruntime-web rejects with a raw WASM memory pointer as the error
+    (users see "XGBoost: <pointer>" instead of an opset-mismatch message).
+    Pin conservatively to opset 18 / ml 3.
     """
     from skl2onnx import convert_sklearn
     from skl2onnx.common.data_types import FloatTensorType
 
     initial_types = [('float_input', FloatTensorType([None, n_features]))]
-    onnx_model = convert_sklearn(model, initial_types=initial_types)
+    onnx_model = convert_sklearn(
+        model,
+        initial_types=initial_types,
+        target_opset={"": 18, "ai.onnx.ml": 3},
+    )
     with open(out_path, "wb") as f:
         f.write(onnx_model.SerializeToString())
+
+    # Sanity check — verify the export lands on an IR version ORT-Web can load.
     kb = out_path.stat().st_size // 1024
-    print(f"    {out_path.name}  ({kb} KB)")
+    ir = onnx_model.ir_version
+    ops = {o.domain or "ai.onnx": o.version for o in onnx_model.opset_import}
+    if ir > 9:
+        raise RuntimeError(
+            f"{out_path.name}: exported IR version {ir} exceeds onnxruntime-web "
+            f"1.20.1's max of 9. Lower target_opset and re-export."
+        )
+    print(f"    {out_path.name}  ({kb} KB, IR {ir}, opsets {ops})")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

@@ -121,10 +121,17 @@ def build_attention_lstm(lookback: int, n_features: int, attn_units: int = 32):
     Architecture:
       Input(lookback, n_features)
       → LSTM(64, return_sequences=True, dropout=0.20, recurrent_dropout=0.10)
-      → Bahdanau attention: eₜ = vᵀ·tanh(Wₐ·hₜ), α = softmax(e)
+      → Bahdanau attention: eₜ = vᵀ·tanh(Wₐ·hₜ), α = softmax(e) over time
       → Multiply([hidden, α])          (B, T, 64)
       → GlobalAveragePooling1D         (B, 64)   ← mean over T
       → Dropout(0.20) → Dense(32, relu) → Dense(1)
+
+    IMPORTANT — TF.js softmax axis restriction:
+      TF.js 4.x (kernels/Softmax.ts) throws:
+        "Softmax along a non-last dimension is not yet supported"
+      when `axis < ndim - 1`. To stay compatible we Reshape (B,T,1) → (B,T),
+      softmax over the last (and only) axis, then Reshape back to (B,T,1).
+      Mathematically identical; TF.js-safe.
     """
     inputs = keras.Input(shape=(lookback, n_features), name="input")
 
@@ -137,7 +144,10 @@ def build_attention_lstm(lookback: int, n_features: int, attn_units: int = 32):
     score  = keras.layers.Dense(attn_units, use_bias=False, name="attn_W")(hidden)
     score  = keras.layers.Activation("tanh", name="attn_tanh")(score)
     score  = keras.layers.Dense(1, use_bias=False, name="attn_v")(score)
-    alpha  = keras.layers.Softmax(axis=1, name="attn_softmax")(score)
+    # score shape: (B, T, 1). Reshape to (B, T) so softmax runs on the last axis.
+    score_flat = keras.layers.Reshape((lookback,), name="score_flat")(score)
+    alpha_flat = keras.layers.Softmax(name="attn_softmax")(score_flat)       # default axis=-1
+    alpha      = keras.layers.Reshape((lookback, 1), name="alpha")(alpha_flat)  # back to (B, T, 1)
 
     # Weighted hidden states; GAP averages over T (equivalent to sum up to 1/T scale)
     weighted = keras.layers.Multiply(name="weighted")([hidden, alpha])

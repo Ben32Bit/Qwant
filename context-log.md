@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-04-19 — Forecast round 6: LSTM attention softmax axis + ORT-Web opset pin
+
+**LSTM: "Softmax along a non-last dimension is not yet supported."**
+TF.js 4.x's Softmax kernel rejects any softmax whose axis is not the last
+dim. Our Bahdanau attention applies `Softmax(axis=1)` to the raw attention
+scores of shape `(B, T, 1)` — axis=1 is second-to-last, so the kernel throws.
+Fix (`backend/scripts/train_lstm.py::build_attention_lstm`):
+- Reshape `(B, T, 1) → (B, T)` before softmax.
+- Softmax on the default last axis (mathematically identical since the
+  squeezed dim was length 1).
+- Reshape back `(B, T) → (B, T, 1)` before the Multiply with hidden states.
+This is a graph-topology change, so the LSTM must be retrained + re-exported.
+
+**XGBoost: "8667456" (raw WASM pointer error).**
+ONNX Runtime Web 1.20.1 cannot load models exported at IR version 10 / opset
+22 (current skl2onnx default). When it tries, the WASM backend throws a raw
+memory pointer that bubbles up as a number through the JS binding; our
+`catch` saw `typeof e === 'number'` and `String(e)` = "8667456". Two fixes:
+
+1. **`frontend/index.html`** — upgraded CDN pin from `onnxruntime-web@1.20.1`
+   → `@1.22.0`. 1.22 supports ai.onnx opset 22 / IR v10, so the
+   already-committed ONNX files load without retraining.
+2. **`backend/scripts/train_xgboost.py`** — defence in depth: explicitly
+   set `target_opset={"": 18, "ai.onnx.ml": 3}` in `convert_sklearn`, and
+   assert IR ≤ 9 on export. Any future re-train stays backward-compatible
+   with older ort-web builds.
+3. **`frontend/src/ml/XGBoostInferer.js`** — added `describeOrtError` that
+   detects numeric errors and rewrites them into a diagnostic pointing at
+   the opset / CDN-version mismatch, so we never again surface raw WASM
+   pointers to the user.
+
+**Files affected:**
+- `backend/scripts/train_lstm.py`
+- `backend/scripts/train_xgboost.py`
+- `frontend/index.html`
+- `frontend/src/ml/XGBoostInferer.js`
+
+**User action required (LSTM only):**
+- `cd backend && python scripts/train_lstm.py` (re-exports with the
+  TF.js-compatible softmax path) → commit `frontend/public/models/lstm/`.
+- XGBoost requires no retrain — the 1.22.0 CDN pin handles the IR v10 models
+  that are already committed.
+
+---
+
 ## 2026-04-19 — Forecast round 5: LSTM Keras 2 export + Vercel rewrite hardening + XGBoost hang guard
 
 **LSTM "InputLayer should be passed either batchInputShape or inputShape"**
