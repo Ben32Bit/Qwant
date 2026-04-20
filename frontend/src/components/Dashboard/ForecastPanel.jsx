@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useForecast } from '../../hooks/useForecast.js'
 import ForecastComposite from './ForecastComposite.jsx'
 import ForecastSnapshotCards from './ForecastSnapshotCards.jsx'
 import ForecastMethodCard from './ForecastMethodCard.jsx'
+import ForecastExport from './ForecastExport.jsx'
 import SentimentPanel from './SentimentPanel.jsx'
 import EnsembleCard from './EnsembleCard.jsx'
 import { computeEnsemble } from '../../ml/MetaEnsemble.js'
@@ -178,6 +179,10 @@ export default function ForecastPanel({ backtest, portfolio }) {
   const resultMap = {}
   for (const r of results) resultMap[r.method] = r
 
+  // Ref wraps the content area that gets captured by the PNG export. It
+  // excludes the header (Run/Export buttons) so the snapshot is clean.
+  const exportRef = useRef(null)
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-4 space-y-4 fade-in">
@@ -195,24 +200,35 @@ export default function ForecastPanel({ backtest, portfolio }) {
               All methods use walk-forward out-of-sample validation (Lopez de Prado, 2018)
             </p>
           </div>
-          <button
-            onClick={run}
-            disabled={isRunning || !backtest}
-            className="mono text-xs px-4 py-2 rounded border transition-colors"
-            style={{
-              borderColor:  isRunning ? 'var(--border)' : 'var(--accent-blue)',
-              color:        isRunning ? 'var(--text-secondary)' : 'var(--accent-blue)',
-              background:   'transparent',
-              cursor:       isRunning ? 'not-allowed' : 'pointer',
-              opacity:      isRunning ? 0.6 : 1,
-            }}
-            onMouseEnter={e => { if (!isRunning) e.currentTarget.style.background = 'rgba(74,158,255,0.1)' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-          >
-            {isRunning ? 'Running…'
-              : hasData ? '↺ Re-run Forecast'
-              : '▶ Run Forecast'}
-          </button>
+          <div className="flex items-start gap-2">
+            <ForecastExport
+              portfolio={portfolio}
+              backtest={backtest}
+              results={results}
+              ensemble={ensemble}
+              meta={meta}
+              targetRef={exportRef}
+              disabled={isRunning}
+            />
+            <button
+              onClick={run}
+              disabled={isRunning || !backtest}
+              className="mono text-xs px-4 py-2 rounded border transition-colors"
+              style={{
+                borderColor:  isRunning ? 'var(--border)' : 'var(--accent-blue)',
+                color:        isRunning ? 'var(--text-secondary)' : 'var(--accent-blue)',
+                background:   'transparent',
+                cursor:       isRunning ? 'not-allowed' : 'pointer',
+                opacity:      isRunning ? 0.6 : 1,
+              }}
+              onMouseEnter={e => { if (!isRunning) e.currentTarget.style.background = 'rgba(74,158,255,0.1)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+            >
+              {isRunning ? 'Running…'
+                : hasData ? '↺ Re-run Forecast'
+                : '▶ Run Forecast'}
+            </button>
+          </div>
         </div>
 
         {/* Architecture dropdown */}
@@ -253,6 +269,43 @@ export default function ForecastPanel({ backtest, portfolio }) {
         )}
 
         {/* ── Primary forecast content ─────────────────────────────────────── */}
+        {/* exportRef wraps everything the PNG snapshot should capture — the
+            header (Run/Export buttons) is intentionally outside so the image
+            isn't cluttered with UI chrome. */}
+        <div ref={exportRef} className="space-y-4">
+
+        {/* Portfolio construct header — always rendered inside the export
+            scope so the PNG includes the tickers/weights that generated
+            these numbers. (The HTML report reads from props directly.) */}
+        {portfolio?.assets?.length > 0 && (hasData || loading.phase1) && (
+          <div className="rounded-lg border p-3" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
+            <div className="flex items-baseline justify-between mb-2">
+              <h3 className="mono font-bold text-xs" style={{ color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Portfolio Construct
+              </h3>
+              <span className="mono" style={{ fontSize: 10, color: 'var(--text-secondary)' }}>
+                {portfolio.start_date ?? '—'} → {portfolio.end_date ?? '—'}
+                {portfolio.rebalance_frequency && ` · ${portfolio.rebalance_frequency} rebal`}
+                {portfolio.benchmark && ` · vs ${portfolio.benchmark}`}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {portfolio.assets.map((a, i) => {
+                const w = (a.weight ?? 0) * 100
+                const colour = w >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'
+                return (
+                  <div key={i} className="mono px-2 py-1 rounded"
+                    style={{ fontSize: 10, background: 'rgba(255,255,255,0.04)', border: `1px solid ${colour}44` }}>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{a.ticker}</span>
+                    <span style={{ color: colour, marginLeft: 6 }}>
+                      {w >= 0 ? '+' : ''}{w.toFixed(1)}%
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Horizon-honest snapshot cards — 1w / 1m / 3m ensemble medians.
             These three cutoffs are all at or inside each model's training
@@ -312,6 +365,8 @@ export default function ForecastPanel({ backtest, portfolio }) {
             })}
           </div>
         )}
+
+        </div> {/* end exportRef wrapper */}
 
         {/* ── Meta-analysis (shows once ensemble is ready) ─────────────────── */}
 
