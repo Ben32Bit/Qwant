@@ -1390,3 +1390,56 @@ npm run dev
 **Pending:**
 - [ ] Live smoke test on Vercel (verify capped bands render correctly and ensemble line doesn't develop a visible kink at cap boundaries).
 - [ ] Retrain XGBoost/N-BEATS on longer horizons if we decide the 21d cap is too restrictive for the composite view.
+
+---
+
+## 2026-04-20 — Forecast remediation round 8: LSTM sense-check + snapshot cards
+
+**Context:** LSTM was producing implausible numbers on some portfolios. Two-pronged fix: (A) sanity guards inside the autoregressive rollout, and (B) restructure the UI so the headline numbers come from horizon-honest 1w / 1m / 3m snapshot cards, with the 12-month continuous chart demoted to an "exploratory" expandable section.
+
+### A. LSTM sense-check guards (`frontend/src/ml/LSTMInferer.js`)
+
+MC Dropout × 252-step autoregression on a small LSTM can produce pathological paths once the scaler saturates. Added four layered guards:
+
+1. **Per-step return clip** — each scaled prediction is unscaled then clamped to ±3σ of the training daily-return std (σ estimated from `rawReturnSeed`). Stops runaway single-step jumps.
+2. **Hard cumulative envelope** — per-path cumulative return clipped to [-60%, +200%]; hitting the envelope marks the path as diverged.
+3. **Scaler saturation detector** — if a pass's rebuilt scaled feature row has any |value| > 2 for ≥5 consecutive steps, mark the path as diverged (the LSTM is being fed off-distribution inputs and its predictions are unreliable).
+4. **Plausibility gates** — (i) if <20% of paths survive, throw an error (whole forecast untrustworthy); (ii) if the 21d ensemble median is outside ±25%, throw an error (post-hoc sanity check).
+
+Diverged paths are excluded from percentile band computation (not frozen-and-included like before). The LSTM method card shows `error` rather than fantasy numbers when any guard trips.
+
+### B. Horizon-honest snapshot cards (`frontend/src/components/Dashboard/ForecastSnapshotCards.jsx`)
+
+New 3-card component above the composite chart:
+
+- **1 week (5 days)** — all 6 models legitimate (every model's training horizon ≥5d).
+- **1 month (21 days)** — all 6 models legitimate (= XGBoost's training horizon exactly).
+- **3 months (63 days)** — 5 models (XGBoost dropped out per round-7 cap).
+
+Each card shows:
+- Active model count (n=X/6) with colour-coding.
+- Ensemble median as % and projected $ value.
+- 90% range [p5, p95] as % and $.
+- Per-method colour dots with individual p50 readings; opacity scales with distance from ensemble median (tighter consensus = brighter dots).
+- Methodology footnote explaining why that horizon is defensible.
+
+The existing `ForecastComposite` (12-month continuous chart) is now wrapped in a `<details open>` element labelled *"12-month exploratory chart · short-horizon models capped; interpret with caution past 3 months"*. Users can collapse it; by default it's still visible for continuity.
+
+**Files affected:**
+- `frontend/src/ml/LSTMInferer.js` — added constants + 4 guards + survivor filter
+- `frontend/src/components/Dashboard/ForecastSnapshotCards.jsx` — new component
+- `frontend/src/components/Dashboard/ForecastPanel.jsx` — wired snapshot cards, demoted composite to `<details>`
+
+**Decisions:**
+- Guards are hard errors, not silent fallbacks. If the LSTM rollout can't produce a trustworthy band, the method card surfaces the error reason — users see *why* rather than staring at an impossible projection.
+- Snapshot cards are the new headline; composite chart demoted but kept. This way Kelly / Scenario / Ensemble panels downstream still have access to the full 252d ensemble band, while the default reading experience is horizon-honest.
+- Round-7 horizon caps (XGBoost=21d, N-BEATS=63d) are what make the 3-card layout clean: the three cutoffs map 1:1 to degradation boundaries.
+
+**Current state:**
+- Build passes (`vite build` → `built in 8.70s`).
+- LSTM now either produces a trustworthy band or surfaces an actionable error; no more "very crazy numbers" in the cards.
+- Forecast tab opens with three succinct snapshot cards; everything else (composite chart, method cards, ensemble panel, Kelly, scenarios, sentiment) is unchanged below.
+
+**Pending:**
+- [ ] Smoke test: run the forecast on a high-vol portfolio that previously broke the LSTM and confirm it either comes back plausible or surfaces an error cleanly.
+- [ ] Consider adding a small "disagreement" badge to each snapshot card when model-to-model spread is large.

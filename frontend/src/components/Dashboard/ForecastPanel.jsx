@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useForecast } from '../../hooks/useForecast.js'
 import ForecastComposite from './ForecastComposite.jsx'
+import ForecastSnapshotCards from './ForecastSnapshotCards.jsx'
 import ForecastMethodCard from './ForecastMethodCard.jsx'
 import SentimentPanel from './SentimentPanel.jsx'
 import EnsembleCard from './EnsembleCard.jsx'
@@ -231,15 +232,38 @@ export default function ForecastPanel({ backtest, portfolio }) {
 
         {/* ── Primary forecast content ─────────────────────────────────────── */}
 
-        {/* Composite chart — all 6 method medians on one chart */}
+        {/* Horizon-honest snapshot cards — 1w / 1m / 3m ensemble medians.
+            These three cutoffs are all at or inside each model's training
+            horizon, so every number here is academically defensible. */}
         {(hasData || loading.phase1) && (
-          <ForecastComposite
+          <ForecastSnapshotCards
             results={results}
-            equityCurve={backtest?.equity_curve}
-            forecastStart={meta?.forecast_start}
-            loading={loading.phase1}
             ensemble={ensemble}
+            lastValue={lastValue}
+            loading={loading.phase1}
           />
+        )}
+
+        {/* Composite chart — all 6 method medians on one chart.
+            Demoted below the snapshot cards: past 3m the short-horizon
+            models are extrapolated or dropped, so this view is exploratory. */}
+        {(hasData || loading.phase1) && (
+          <details open>
+            <summary className="mono text-xs cursor-pointer select-none mb-2"
+              style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+              ▾ 12-month exploratory chart
+              <span className="ml-2" style={{ opacity: 0.6 }}>
+                · short-horizon models capped; interpret with caution past 3 months
+              </span>
+            </summary>
+            <ForecastComposite
+              results={results}
+              equityCurve={backtest?.equity_curve}
+              forecastStart={meta?.forecast_start}
+              loading={loading.phase1}
+              ensemble={ensemble}
+            />
+          </details>
         )}
 
         {/* 2×3 individual method cards */}
