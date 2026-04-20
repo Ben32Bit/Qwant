@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, memo } from 'react'
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ReferenceLine, ResponsiveContainer,
@@ -240,12 +240,28 @@ function EnsembleDegradationStrip({ capDates, forecastHorizon }) {
   )
 }
 
-export default function ForecastComposite({ results, equityCurve, forecastStart, loading, ensemble }) {
+// Cap historical points drawn into the chart. A 10-year backtest has ~2500
+// daily points; times 7 lines that's ~17.5k SVG nodes which was making the
+// page stall on click/hover. Uniform stride keeps the shape of the curve.
+const MAX_HISTORICAL_POINTS = 500
+
+function downsampleHistorical(equityCurve) {
+  const n = equityCurve.length
+  if (n <= MAX_HISTORICAL_POINTS) return equityCurve
+  const stride = Math.ceil(n / MAX_HISTORICAL_POINTS)
+  const out = []
+  for (let i = 0; i < n; i += stride) out.push(equityCurve[i])
+  // Always keep the last point — the forecast anchors to it.
+  if (out[out.length - 1] !== equityCurve[n - 1]) out.push(equityCurve[n - 1])
+  return out
+}
+
+function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, ensemble }) {
   const chartData = useMemo(() => {
     if (!equityCurve?.length) return []
 
-    // Historical: use actual portfolio values
-    const historical = equityCurve.map(pt => ({
+    // Historical: use actual portfolio values (downsampled to cap SVG nodes)
+    const historical = downsampleHistorical(equityCurve).map(pt => ({
       date:       pt.date,
       Historical: pt.value,
     }))
@@ -441,3 +457,11 @@ export default function ForecastComposite({ results, equityCurve, forecastStart,
     </div>
   )
 }
+
+export default memo(ForecastCompositeImpl, (prev, next) =>
+  prev.results === next.results &&
+  prev.equityCurve === next.equityCurve &&
+  prev.forecastStart === next.forecastStart &&
+  prev.loading === next.loading &&
+  prev.ensemble === next.ensemble
+)

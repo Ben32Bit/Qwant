@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid,
@@ -354,7 +354,7 @@ function getMetaItems(method, meta) {
 
 // ── Main card ─────────────────────────────────────────────────────────────────
 
-export default function ForecastMethodCard({ result, loading, browserCompute, lastValue }) {
+function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) {
   const { method, label, color, forecast, metadata, error, compute_ms } = result ?? {}
   const complexity = COMPLEXITY[method] ?? { label: '—', color: 'var(--text-secondary)' }
   const citations  = CITATIONS[method] ?? []
@@ -485,3 +485,12 @@ export default function ForecastMethodCard({ result, loading, browserCompute, la
     </div>
   )
 }
+
+// Memoized so a parent re-render (e.g. ensemble recompute, tooltip state
+// elsewhere) doesn't force six full chart re-layouts on every click.
+export default memo(ForecastMethodCardImpl, (prev, next) =>
+  prev.result === next.result &&
+  prev.loading === next.loading &&
+  prev.browserCompute === next.browserCompute &&
+  prev.lastValue === next.lastValue
+)

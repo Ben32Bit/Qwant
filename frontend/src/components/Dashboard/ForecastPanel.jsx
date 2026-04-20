@@ -22,6 +22,28 @@ const NBEATS_EST_MS  = 5_000    // ONNX Runtime Web: ~3-5s (N-BEATS 12 periods)
 const PHASE2_EST_MS  = 15_000   // HMM + GP
 const LSTM_EST_MS    = 5_000    // TF.js browser inference: ~2-5s
 
+// Expandable wrapper for the heavy 12m composite chart. Uses local state so
+// the chart literally unmounts when collapsed — a `<details>` element only
+// toggles CSS visibility and would still run Recharts layout on every click.
+function CompositeChartSection({ children }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="mono text-xs cursor-pointer select-none mb-2 w-full text-left"
+        style={{ color: 'var(--text-secondary)', opacity: 0.75, background: 'transparent', border: 'none', padding: '4px 0' }}
+      >
+        {open ? '▾' : '▸'} 12-month exploratory chart
+        <span className="ml-2" style={{ opacity: 0.6 }}>
+          · short-horizon models capped; interpret with caution past 3 months
+        </span>
+      </button>
+      {open && children}
+    </div>
+  )
+}
+
 // Placeholder cards while a phase is loading
 function LoadingCard({ method, browserCompute = false }) {
   const LABELS = {
@@ -245,17 +267,11 @@ export default function ForecastPanel({ backtest, portfolio }) {
         )}
 
         {/* Composite chart — all 6 method medians on one chart.
-            Demoted below the snapshot cards: past 3m the short-horizon
-            models are extrapolated or dropped, so this view is exploratory. */}
+            Collapsed by default AND unmounted when closed: the chart draws
+            ~2500 historical points × 7 lines, which is a serious render /
+            SVG-node load that was making the page unresponsive on click. */}
         {(hasData || loading.phase1) && (
-          <details open>
-            <summary className="mono text-xs cursor-pointer select-none mb-2"
-              style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
-              ▾ 12-month exploratory chart
-              <span className="ml-2" style={{ opacity: 0.6 }}>
-                · short-horizon models capped; interpret with caution past 3 months
-              </span>
-            </summary>
+          <CompositeChartSection>
             <ForecastComposite
               results={results}
               equityCurve={backtest?.equity_curve}
@@ -263,7 +279,7 @@ export default function ForecastPanel({ backtest, portfolio }) {
               loading={loading.phase1}
               ensemble={ensemble}
             />
-          </details>
+          </CompositeChartSection>
         )}
 
         {/* 2×3 individual method cards */}
