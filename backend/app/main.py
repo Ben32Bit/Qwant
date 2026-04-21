@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.routers import chat, backtest, data, screen, unified, forecast, regime
+from app.routers import chat, backtest, data, screen, unified, forecast, regime, ticker
 from app.services.price_store import init_db
 
 logging.basicConfig(
@@ -109,6 +109,7 @@ app.include_router(screen.router,   prefix="/api")
 app.include_router(unified.router,  prefix="/api")
 app.include_router(forecast.router, prefix="/api")
 app.include_router(regime.router,   prefix="/api")
+app.include_router(ticker.router,   prefix="/api")
 
 
 @app.get("/health")

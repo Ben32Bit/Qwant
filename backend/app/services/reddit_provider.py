@@ -102,6 +102,72 @@ def get_reddit_context(tickers: list[str], as_of_date: str) -> dict:
     return result
 
 
+def get_trending_posts(
+    subreddits: list[str] | None = None,
+    limit_per_sub: int = 5,
+) -> list[dict]:
+    """
+    Return top-scoring hot posts across a set of subreddits for a news ticker feed.
+
+    Unlike `get_reddit_context` (which searches by ticker and returns counts),
+    this hits `/r/X/hot.json` to pull actual post titles for display.
+
+    Returns
+    -------
+    list of dicts: [{"title": str, "score": int, "subreddit": str, "url": str}, ...]
+      Sorted by score descending. Empty list if all subreddits fail.
+    """
+    subs = subreddits or SUBREDDITS
+    cache_key = f"trending:{','.join(sorted(subs))}:{limit_per_sub}"
+    if cache_key in _cache:
+        ts, cached = _cache[cache_key]
+        # Shorter TTL than per-ticker context — trending data changes faster.
+        if time.time() - ts < 900:   # 15 min
+            return cached
+
+    out: list[dict] = []
+    for sub in subs:
+        try:
+            posts = _fetch_hot_posts(sub, limit_per_sub)
+            for p in posts:
+                title = (p.get("title") or "").strip()
+                if not title or p.get("stickied"):
+                    continue
+                out.append({
+                    "title":     title[:180],
+                    "score":     int(p.get("score") or 0),
+                    "subreddit": sub,
+                    "url":       f"https://reddit.com{p.get('permalink', '')}",
+                })
+        except Exception as exc:
+            logger.debug("Reddit trending %s failed: %s", sub, exc)
+
+    out.sort(key=lambda x: x["score"], reverse=True)
+    _cache[cache_key] = (time.time(), out)
+    return out
+
+
+def _fetch_hot_posts(subreddit: str, limit: int) -> list[dict]:
+    url = f"https://www.reddit.com/r/{subreddit}/hot.json?limit={limit}"
+    headers = {
+        "User-Agent": "PortfolioBacktester/1.0 (research; non-commercial)",
+        "Accept": "application/json",
+    }
+    try:
+        import requests  # noqa: PLC0415
+        resp = requests.get(url, timeout=10, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+    except ImportError:
+        import urllib.request as _urllib  # noqa: PLC0415
+        req = _urllib.Request(url, headers=headers)
+        with _urllib.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+
+    children = data.get("data", {}).get("children", [])
+    return [c.get("data", {}) for c in children]
+
+
 def _fetch_posts(subreddit: str, query: str) -> list[dict]:
     url = (
         f"https://www.reddit.com/r/{subreddit}/search.json"

@@ -1,9 +1,13 @@
 import React from 'react'
 import SplitView from './SplitView.jsx'
+import TickerBar from './TickerBar.jsx'
 
 export default function App() {
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--bg-primary)' }}>
+      {/* Rolling market ticker — live prices + GDELT headlines + Reddit trending */}
+      <TickerBar />
+
       {/* Header */}
       <header
         className="flex items-center justify-between px-6 py-3 border-b"
@@ -14,7 +18,7 @@ export default function App() {
             ▶ QWANT
           </span>
           <span style={{ color: 'var(--text-secondary)' }} className="text-sm">
-            AI Investment Analyst
+            All you ever Qwanted
           </span>
         </div>
         <div className="flex items-center gap-4 text-xs mono" style={{ color: 'var(--text-secondary)' }}>

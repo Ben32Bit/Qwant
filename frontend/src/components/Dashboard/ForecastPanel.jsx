@@ -27,7 +27,7 @@ const LSTM_EST_MS    = 5_000    // TF.js browser inference: ~2-5s
 // the chart literally unmounts when collapsed — a `<details>` element only
 // toggles CSS visibility and would still run Recharts layout on every click.
 function CompositeChartSection({ children }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)
   return (
     <div>
       <button
@@ -366,8 +366,6 @@ export default function ForecastPanel({ backtest, portfolio }) {
           </div>
         )}
 
-        </div> {/* end exportRef wrapper */}
-
         {/* ── Meta-analysis (shows once ensemble is ready) ─────────────────── */}
 
         {/* Ensemble forecast card */}
@@ -397,6 +395,8 @@ export default function ForecastPanel({ backtest, portfolio }) {
             results={results}
           />
         )}
+
+        </div> {/* end exportRef wrapper — captures through scenario testing */}
 
         {/* FinBERT sentiment — Phase 4B */}
         {hasData && <SentimentPanel newsContext={newsContext} edgarContext={edgarContext} />}

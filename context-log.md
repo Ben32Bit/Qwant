@@ -2,6 +2,92 @@
 
 ---
 
+## 2026-04-21 — Branding + live rolling ticker bar
+
+Three linked changes to the app shell:
+
+1. **Favicon** — `frontend/public/favicon.svg` (new). SVG 64×64 with a dark
+   rounded-rect background matching `--bg-primary`, an ascending blue line
+   chart + green dot (market-up motif), and the QWANT ▶ play-triangle in
+   accent-blue. `index.html` already pointed at `/favicon.svg` but the file
+   didn't exist, so browsers were showing the default blank icon.
+
+2. **Header subtitle** — "AI Investment Analyst" → "All you ever Qwanted"
+   in `frontend/src/components/Layout/App.jsx`. Browser tab title in
+   `index.html` also rebranded to "Qwant — All you ever Qwanted".
+
+3. **Rolling ticker bar** (top-of-app marquee). Three pieces:
+
+   - **Backend endpoint** `GET /api/ticker/feed`
+     (`backend/app/routers/ticker.py`, new). Mixes three data sources into
+     a single flat list the frontend just iterates:
+       · **prices** — latest close + daily % change for 21 curated tickers
+         (SPY/QQQ/DIA/IWM/VTI, 10 mega-caps, GLD/TLT/USO/VIXY, BTC/ETH).
+         Reuses `data_service.fetch_prices` so it hits the existing SQLite
+         L2 cache and doesn't re-fetch from yfinance on every page load.
+       · **news** — 12 broad-market headlines from GDELT 2.0 DOC API via
+         `news_provider._fetch_headlines` with query
+         `"stock market Wall Street Nasdaq Dow Jones earnings"`.
+       · **reddit** — 10 trending posts from r/wallstreetbets +
+         r/investing + r/stocks. Required a new helper
+         `reddit_provider.get_trending_posts()` that hits `/r/X/hot.json`
+         (existing `get_reddit_context` does per-ticker search + counts,
+         not post titles). Sticky-post filtered, sorted by score.
+     Cache TTL: 5 min. Graceful per-source fallbacks — if any upstream
+     fails, the other two still populate and the UI shows less variety
+     rather than breaking.
+
+   - **Component** `frontend/src/components/Layout/TickerBar.jsx` (new).
+     Fetches `/api/ticker/feed` on mount and every 5 min. Renders items
+     twice back-to-back, marquee-scrolls the strip by -50% over
+     `max(60s, N × 4s)` with a pure CSS `@keyframes` animation. Seamless
+     loop: the -50% translate aligns the second copy to where the first
+     started. Pause-on-hover via `:hover { animation-play-state: paused }`.
+     Loading / failure states render a non-scrolling placeholder so the
+     30px strip never collapses and push the layout around.
+
+   - **Styles** — `.ticker-scroll` + `@keyframes marquee-scroll` added to
+     `frontend/src/styles/globals.css`.
+
+Rate limiting: the endpoint inherits the global rate limit (lenient) —
+a 5-min server-side cache means hammering it from one tab still costs
+one upstream fetch per 5 min regardless of client behaviour.
+
+Files:
+- `backend/app/routers/ticker.py` (new)
+- `backend/app/main.py` (router registration)
+- `backend/app/services/reddit_provider.py` (added `get_trending_posts`, `_fetch_hot_posts`)
+- `frontend/public/favicon.svg` (new)
+- `frontend/src/components/Layout/TickerBar.jsx` (new)
+- `frontend/src/components/Layout/App.jsx` (title + TickerBar mount)
+- `frontend/src/styles/globals.css` (marquee keyframes)
+- `frontend/index.html` (tab title)
+
+---
+
+## 2026-04-21 — Forecast UI: 12m chart default-open + PNG export extended to scenario panel
+
+Two small ForecastPanel.jsx polish items:
+
+1. **`CompositeChartSection` now defaults to open** (`useState(true)`).
+   The 12-month composite chart was collapsed by default to protect first
+   render from Recharts' ~2500pt × 7-line layout cost. After the
+   Attention-LSTM / progress-bar work stabilised, users want to see the
+   chart immediately — the heavy render only happens once and is cached
+   by React afterwards. Button still toggles closed to unmount for
+   performance if needed.
+2. **`exportRef` now wraps through ScenarioPanel.** Previously the PNG
+   snapshot stopped after the 2×3 method cards grid, so Ensemble /
+   Kelly / Scenario sections were cut off. Moved the closing `</div>`
+   past `<ScenarioPanel>` so the PNG captures the full forecast sheet
+   all the way to scenario stress testing. Sentiment + OOS methodology
+   footer stay outside the export region (they're citations / news,
+   not analytical output).
+
+Files: `frontend/src/components/Dashboard/ForecastPanel.jsx`.
+
+---
+
 ## 2026-04-19 — Forecast round 6: LSTM attention softmax axis + ORT-Web opset pin
 
 **LSTM: "Softmax along a non-last dimension is not yet supported."**

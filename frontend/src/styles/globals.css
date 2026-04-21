@@ -79,6 +79,27 @@ body {
 .neutral  { color: var(--text-secondary); }
 .warning  { color: var(--accent-yellow); }
 
+/* Ticker marquee — the top-of-app rolling news/price strip.
+   Items are rendered twice back-to-back and translated by -50%, so the
+   second copy lands where the first started and the loop is seamless. */
+@keyframes marquee-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.ticker-scroll {
+  display: inline-block;
+  white-space: nowrap;
+  animation-name: marquee-scroll;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+.ticker-scroll:hover {
+  animation-play-state: paused;
+}
+
 /* Skeleton animation */
 @keyframes shimmer {
   0% { background-position: -200% 0; }
