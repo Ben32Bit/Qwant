@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useMemo } from 'react'
 
 const PHASE1_METHODS = ['xgboost', 'nbeats', 'factor']
 const PHASE2_METHODS = ['hmm', 'var', 'lstm']
@@ -292,7 +292,10 @@ export function useForecast(backtest, portfolio) {
     }
   }, [backtest, portfolio])
 
-  const allResults = mergeResults(phase1, phase2)
+  // Memoize so `results` is a stable reference when phase1/phase2 haven't
+  // changed. Otherwise consumers that depend on it (e.g. the ensemble effect
+  // in ForecastPanel) fire every render and can drive a runaway loop.
+  const allResults = useMemo(() => mergeResults(phase1, phase2), [phase1, phase2])
 
   // Phase 1 carries forecast_start / forecast_end; Phase 2 carries
   // regime_probs + ensemble_weights (computed only after HMM lands).

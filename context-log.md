@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-04-22 — Fix runaway render loop in ForecastPanel (tab freeze)
+
+Diagnosed a tab-freeze reported on the deployed Vercel build. Chrome perf traces froze at "loading trace" and console showed a benign `bull_low_vol.onnx 404` (optional stacker never shipped) plus SharedArrayBuffer warnings (ORT-Web falling back to single-threaded WASM — also benign). Neither of those caused the freeze.
+
+**Actual root cause:** infinite `setState` loop in `ForecastPanel.jsx` once Phase 2 landed. `useForecast.js:295` returned `results = mergeResults(phase1, phase2)` — a fresh `order.map(...)` array on every render. The ensemble effect in `ForecastPanel.jsx:164-172` declared `results` as a dep, so it re-fired every render; `computeEnsemble` always returns a new object → `setEnsemble(newObj)` → another render → another new `results` array → loop. Each iteration ran `blendBands` (~7k ops) and re-rendered the whole forecast subtree.
+
+Before Phase 2 the loop didn't engage because `forecasted.length === 0` → `setEnsemble(null)` is a no-op (`null === null`), which is why the freeze only hit *after* forecasting finished.
+
+**Fix:** wrap `mergeResults` in `useMemo([phase1, phase2])` in `frontend/src/hooks/useForecast.js`. Now `results` is a stable reference when phase1/phase2 haven't changed; the ensemble effect only fires when inputs genuinely change.
+
+**Why this specific approach:** memoising the producer is strictly less invasive than shallow-equal-guarding every consumer. The root primitive — "do not hand out new array references when the data is the same" — belongs in the hook, not in every callsite that might depend on it.
+
+**Files:** `frontend/src/hooks/useForecast.js` (added `useMemo` import + wrapped `allResults`).
+
+---
+
 ## 2026-04-22 — Browser-load optimisation pass (Fixes A–L)
 
 Low-risk performance work to cut initial bundle, re-render cost, and background-tab CPU. All changes are additive or wrapping — no behaviour changes.
