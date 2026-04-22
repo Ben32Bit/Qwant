@@ -3,6 +3,19 @@ import axios from 'axios'
 import { API_BASE } from '../../utils/api.js'
 
 const REFRESH_MS = 5 * 60 * 1000   // 5 min — matches backend cache TTL
+const MAX_ITEMS  = 30              // cap DOM nodes so marquee repaint cost stays bounded
+
+// Module-level in-flight promise — if two TickerBar instances mount (e.g.
+// during hot reload or a future layout change) they share a single fetch
+// instead of hammering the endpoint twice.
+let _inflight = null
+async function fetchFeed() {
+  if (_inflight) return _inflight
+  _inflight = axios.get(`${API_BASE}/ticker/feed`, { timeout: 20000 })
+    .then(res => res.data)
+    .finally(() => { _inflight = null })
+  return _inflight
+}
 
 /**
  * Rolling ticker marquee at the top of the app.
@@ -24,10 +37,14 @@ export default function TickerBar() {
     let cancelled = false
 
     async function load() {
+      // Skip the network round-trip when the tab is backgrounded — the
+      // response would sit idle and the user wouldn't see it until they
+      // switched back (at which point we refetch via `visibilitychange`).
+      if (typeof document !== 'undefined' && document.hidden) return
       try {
-        const res = await axios.get(`${API_BASE}/ticker/feed`, { timeout: 20000 })
+        const data = await fetchFeed()
         if (cancelled) return
-        setItems(res.data?.items ?? [])
+        setItems((data?.items ?? []).slice(0, MAX_ITEMS))
         setError(false)
         setLoaded(true)
       } catch (e) {
@@ -39,7 +56,27 @@ export default function TickerBar() {
 
     load()
     const id = setInterval(load, REFRESH_MS)
-    return () => { cancelled = true; clearInterval(id) }
+
+    // Refresh immediately when the user returns to the tab — covers the
+    // case where the tab sat in background for longer than the cache TTL.
+    // Also flip a root-level attribute the CSS reads to pause the marquee
+    // animation entirely while hidden (zero compositor work).
+    const syncHidden = () => {
+      document.documentElement.setAttribute('data-tab-hidden', String(document.hidden))
+    }
+    syncHidden()
+    const onVisibility = () => {
+      syncHidden()
+      if (!document.hidden) load()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      cancelled = true
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisibility)
+      document.documentElement.removeAttribute('data-tab-hidden')
+    }
   }, [])
 
   // Duplicate the list so the -50% translate creates a seamless loop.

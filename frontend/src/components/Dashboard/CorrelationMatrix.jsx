@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, memo } from 'react'
 
 function corrColor(val) {
   if (val == null) return 'var(--bg-secondary)'
@@ -21,7 +21,7 @@ function corrTextColor(val) {
   return 'var(--text-primary)'
 }
 
-export default function CorrelationMatrix({ correlationMatrix, loading }) {
+function CorrelationMatrix({ correlationMatrix, loading }) {
   const { tickers, matrix } = useMemo(() => {
     if (!correlationMatrix) return { tickers: [], matrix: [] }
     const tickers = Object.keys(correlationMatrix)
@@ -93,3 +93,5 @@ export default function CorrelationMatrix({ correlationMatrix, loading }) {
     </div>
   )
 }
+
+export default memo(CorrelationMatrix)

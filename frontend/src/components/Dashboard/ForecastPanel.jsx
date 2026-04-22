@@ -90,7 +90,7 @@ function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, 
       : lstmStartRef
     const tick = () => setElapsed(Date.now() - (startRef.current ?? Date.now()))
     tick()
-    const id = setInterval(tick, 250)
+    const id = setInterval(tick, 500)
     return () => clearInterval(id)
   }, [activePhase, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef])
 
@@ -348,19 +348,20 @@ export default function ForecastPanel({ backtest, portfolio }) {
               const isLstmBrowserLoading   = method === 'lstm'    && loading.lstm
 
               if (!result && ((inPhase1 && loading.phase1) || (inPhase2 && loading.phase2))) {
-                return <LoadingCard key={method} method={method} />
+                return <div key={method} className="cv-auto"><LoadingCard method={method} /></div>
               }
               if (isXgbBrowserLoading || isNbeatsBrowserLoading || isLstmBrowserLoading) {
-                return <LoadingCard key={method} method={method} browserCompute />
+                return <div key={method} className="cv-auto"><LoadingCard method={method} browserCompute /></div>
               }
               if (!result) return null
               return (
-                <ForecastMethodCard
-                  key={method}
-                  result={result}
-                  loading={inPhase2 && loading.phase2 && !result.forecast}
-                  lastValue={lastValue}
-                />
+                <div key={method} className="cv-auto">
+                  <ForecastMethodCard
+                    result={result}
+                    loading={inPhase2 && loading.phase2 && !result.forecast}
+                    lastValue={lastValue}
+                  />
+                </div>
               )
             })}
           </div>
@@ -370,36 +371,46 @@ export default function ForecastPanel({ backtest, portfolio }) {
 
         {/* Ensemble forecast card */}
         {(hasData || isRunning) && (
-          <EnsembleCard
-            ensemble={ensemble}
-            regimeProbs={regimeProbs}
-            loading={isRunning && !ensemble}
-            lastValue={lastValue}
-          />
+          <div className="cv-auto">
+            <EnsembleCard
+              ensemble={ensemble}
+              regimeProbs={regimeProbs}
+              loading={isRunning && !ensemble}
+              lastValue={lastValue}
+            />
+          </div>
         )}
 
         {/* Kelly position sizing */}
         {(hasData || isRunning) && (
-          <KellyPanel
-            ensemble={ensemble}
-            regimeProbs={regimeProbs}
-            loading={isRunning && !ensemble}
-          />
+          <div className="cv-auto">
+            <KellyPanel
+              ensemble={ensemble}
+              regimeProbs={regimeProbs}
+              loading={isRunning && !ensemble}
+            />
+          </div>
         )}
 
         {/* Scenario stress tester */}
         {(hasData || isRunning) && (
-          <ScenarioPanel
-            ensemble={ensemble}
-            regimeProbs={regimeProbs}
-            results={results}
-          />
+          <div className="cv-auto">
+            <ScenarioPanel
+              ensemble={ensemble}
+              regimeProbs={regimeProbs}
+              results={results}
+            />
+          </div>
         )}
 
         </div> {/* end exportRef wrapper — captures through scenario testing */}
 
         {/* FinBERT sentiment — Phase 4B */}
-        {hasData && <SentimentPanel newsContext={newsContext} edgarContext={edgarContext} />}
+        {hasData && (
+          <div className="cv-auto">
+            <SentimentPanel newsContext={newsContext} edgarContext={edgarContext} />
+          </div>
+        )}
 
         {/* OOS methodology footer */}
         {hasData && (

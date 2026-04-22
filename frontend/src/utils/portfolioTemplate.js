@@ -1,8 +1,16 @@
-import * as XLSX from 'xlsx'
+// SheetJS (~400 KB) is dynamic-imported on first use so it stays out of the
+// initial bundle. Module-level cache — first call pays the network cost,
+// subsequent calls are synchronous reads of the cached module.
+let XLSX = null
+async function loadXlsx() {
+  if (!XLSX) XLSX = await import('xlsx')
+  return XLSX
+}
 
 // ── Download template ─────────────────────────────────────────────────────────
 
-export function downloadTemplate() {
+export async function downloadTemplate() {
+  await loadXlsx()
   const wb = XLSX.utils.book_new()
 
   // ── Portfolio sheet ───────────────────────────────────────────────────────
@@ -56,7 +64,8 @@ export function downloadTemplate() {
 
 const REBALANCE_OPTIONS = ['daily', 'weekly', 'monthly', 'quarterly', 'annually', 'none']
 
-export function parsePortfolioFile(file) {
+export async function parsePortfolioFile(file) {
+  await loadXlsx()
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = (e) => {

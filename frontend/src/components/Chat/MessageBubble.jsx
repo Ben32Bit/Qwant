@@ -1,7 +1,10 @@
-import React from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import React, { Suspense, lazy } from 'react'
 import PortfolioCard from './PortfolioCard.jsx'
+
+// Markdown stack (react-markdown + remark-gfm ≈ 80 KB) is lazy-loaded so
+// first paint of the Chat panel — including the user's own messages, which
+// render as plain text — doesn't pay for it.
+const MarkdownRenderer = lazy(() => import('./MarkdownRenderer.jsx'))
 
 // Markdown component overrides — terminal aesthetic
 const MD_COMPONENTS = {
@@ -84,9 +87,11 @@ export default function MessageBubble({ message }) {
         {isUser || isError ? (
           <span className="text-sm">{message.content}</span>
         ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-            {message.content}
-          </ReactMarkdown>
+          <Suspense fallback={<span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{message.content}</span>}>
+            <MarkdownRenderer components={MD_COMPONENTS}>
+              {message.content}
+            </MarkdownRenderer>
+          </Suspense>
         )}
       </div>
 

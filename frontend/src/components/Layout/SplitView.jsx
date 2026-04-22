@@ -1,13 +1,26 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, Suspense, lazy } from 'react'
 import UnifiedChatPanel from '../Chat/UnifiedChatPanel.jsx'
 import ManualBuilderPanel from '../Chat/ManualBuilderPanel.jsx'
 import ResultsPanel from '../Dashboard/ResultsPanel.jsx'
-import ForecastPanel from '../Dashboard/ForecastPanel.jsx'
 import ScreenerResults from '../Dashboard/ScreenerResults.jsx'
-import RotationEquityChart from '../Dashboard/RotationEquityChart.jsx'
 import DrawdownChart from '../Dashboard/DrawdownChart.jsx'
 import MetricsCards from '../Dashboard/MetricsCards.jsx'
-import FamaFrenchFactors from '../Dashboard/FamaFrenchFactors.jsx'
+
+// Heavy panels / charts only mounted for specific views. Lazy-load so the
+// initial JS bundle stays lean: ForecastPanel pulls in 6 method cards +
+// ensemble/kelly/scenario panels + recharts; RotationEquityChart and
+// FamaFrenchFactors are only reached via the Screener→Rotation flow.
+const ForecastPanel       = lazy(() => import('../Dashboard/ForecastPanel.jsx'))
+const RotationEquityChart = lazy(() => import('../Dashboard/RotationEquityChart.jsx'))
+const FamaFrenchFactors   = lazy(() => import('../Dashboard/FamaFrenchFactors.jsx'))
+
+// Shared fallback while a lazy chunk is fetching — small, low-chrome so it
+// doesn't flash in-and-out noticeably on fast networks.
+const LazyFallback = ({ label = 'Loading…' }) => (
+  <div className="flex items-center justify-center py-8">
+    <span className="mono text-xs" style={{ color: 'var(--text-secondary)' }}>{label}</span>
+  </div>
+)
 
 // ── Tab definitions ───────────────────────────────────────────────────────────
 const TABS = [
@@ -94,14 +107,18 @@ function RotationPanel({ backtest, loading, topNHeld, onPortToManual }) {
           ))}
         </div>
 
-        <RotationEquityChart
-          equityCurve={backtest.equity_curve}
-          benchmarkCurve={backtest.benchmark_curve}
-          holdingSchedule={backtest.holding_schedule}
-        />
+        <Suspense fallback={<LazyFallback label="Loading rotation chart…" />}>
+          <RotationEquityChart
+            equityCurve={backtest.equity_curve}
+            benchmarkCurve={backtest.benchmark_curve}
+            holdingSchedule={backtest.holding_schedule}
+          />
+        </Suspense>
         <DrawdownChart drawdownSeries={backtest.drawdown_series} loading={false} />
         <MetricsCards metrics={backtest.metrics} loading={false} />
-        <FamaFrenchFactors ff5={backtest.ff5_decomposition} loading={false} />
+        <Suspense fallback={<LazyFallback label="Loading factor analysis…" />}>
+          <FamaFrenchFactors ff5={backtest.ff5_decomposition} loading={false} />
+        </Suspense>
       </div>
     </div>
   )
@@ -357,10 +374,12 @@ export default function SplitView() {
               />
             )}
             {rightTab === 'forecast' && (
-              <ForecastPanel
-                backtest={activeBacktest}
-                portfolio={activePortfolio}
-              />
+              <Suspense fallback={<LazyFallback label="Loading forecast engine…" />}>
+                <ForecastPanel
+                  backtest={activeBacktest}
+                  portfolio={activePortfolio}
+                />
+              </Suspense>
             )}
           </div>
         )}

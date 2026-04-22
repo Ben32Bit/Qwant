@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, memo } from 'react'
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
@@ -24,7 +24,7 @@ function CustomTooltip({ active, payload, label, fmt }) {
   )
 }
 
-export default function RollingMetrics({ rollingMetrics, hasBenchmark, loading }) {
+function RollingMetrics({ rollingMetrics, hasBenchmark, loading }) {
   const availableTabs = useMemo(() => {
     if (!rollingMetrics) return []
     return TABS.filter(t => {
@@ -119,3 +119,5 @@ export default function RollingMetrics({ rollingMetrics, hasBenchmark, loading }
     </div>
   )
 }
+
+export default memo(RollingMetrics)

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState, memo } from 'react'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -53,7 +53,7 @@ function RebalanceLabel({ viewBox }) {
   )
 }
 
-export default function WeightDriftChart({ weightHistory, rebalanceDates, loading }) {
+function WeightDriftChart({ weightHistory, rebalanceDates, loading }) {
   const [mode, setMode] = useState('area') // 'area' | 'line'
 
   const { data, tickers, hasShorts, tickerColors } = useMemo(() => {
@@ -238,3 +238,5 @@ export default function WeightDriftChart({ weightHistory, rebalanceDates, loadin
     </div>
   )
 }
+
+export default memo(WeightDriftChart)

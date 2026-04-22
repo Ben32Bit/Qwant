@@ -25,7 +25,7 @@ function BacktestEtaBar({ loading, startRef }) {
     if (!loading) { setElapsed(0); return }
     const tick = () => setElapsed(Date.now() - (startRef.current ?? Date.now()))
     tick()
-    const id = setInterval(tick, 250)
+    const id = setInterval(tick, 500)
     return () => clearInterval(id)
   }, [loading, startRef])
 

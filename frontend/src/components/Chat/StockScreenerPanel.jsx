@@ -1,6 +1,8 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import React, { useState, useRef, useEffect, useCallback, Suspense, lazy } from 'react'
+
+// Markdown stack lazy-loaded — same chunk as MessageBubble, so the second
+// panel loads instantly if the user has already seen an AI chat message.
+const MarkdownRenderer = lazy(() => import('./MarkdownRenderer.jsx'))
 
 const SUGGESTIONS = [
   'Top return sector ETF each quarter, 2022–2025',
@@ -84,9 +86,11 @@ function MessageBubble({ message }) {
         {isUser || isError ? (
           <span className="text-sm">{message.content}</span>
         ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-            {message.content}
-          </ReactMarkdown>
+          <Suspense fallback={<span className="text-sm" style={{ color: 'var(--text-secondary)' }}>{message.content}</span>}>
+            <MarkdownRenderer components={MD_COMPONENTS}>
+              {message.content}
+            </MarkdownRenderer>
+          </Suspense>
         )}
       </div>
     </div>

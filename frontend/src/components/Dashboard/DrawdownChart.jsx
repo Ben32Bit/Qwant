@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, memo } from 'react'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -22,7 +22,7 @@ function CustomTooltip({ active, payload, label }) {
   )
 }
 
-export default function DrawdownChart({ drawdownSeries, loading }) {
+function DrawdownChart({ drawdownSeries, loading }) {
   const data = useMemo(() => {
     if (!drawdownSeries) return []
     const step = Math.max(1, Math.floor(drawdownSeries.length / 500))
@@ -83,9 +83,12 @@ export default function DrawdownChart({ drawdownSeries, loading }) {
             stroke="#ff4757"
             strokeWidth={1.5}
             fill="url(#ddGradient)"
+            isAnimationActive={false}
           />
         </AreaChart>
       </ResponsiveContainer>
     </div>
   )
 }
+
+export default memo(DrawdownChart)

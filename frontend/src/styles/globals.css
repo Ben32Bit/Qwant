@@ -96,8 +96,21 @@ body {
   will-change: transform;
 }
 
-.ticker-scroll:hover {
+.ticker-scroll:hover,
+[data-tab-hidden="true"] .ticker-scroll {
   animation-play-state: paused;
+}
+
+/* Respect user's reduced-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  .ticker-scroll { animation: none !important; }
+}
+
+/* Let the browser skip rendering work for off-screen forecast cards.
+   contain-intrinsic-size reserves approximate space so scroll position is stable. */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 420px;
 }
 
 /* Skeleton animation */

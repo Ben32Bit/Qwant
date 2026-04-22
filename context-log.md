@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-04-22 — Browser-load optimisation pass (Fixes A–L)
+
+Low-risk performance work to cut initial bundle, re-render cost, and background-tab CPU. All changes are additive or wrapping — no behaviour changes.
+
+- **A — Lazy `xlsx`**: `frontend/src/utils/exportExcel.js` and `portfolioTemplate.js` now use a module-level `let XLSX = null` + `await import('xlsx')` pattern. SheetJS (~400KB) no longer lands in the initial bundle; loads on first Excel action.
+- **B — Lazy heavy panels**: `SplitView.jsx` uses `React.lazy` for `ForecastPanel`, `RotationEquityChart`, and `FamaFrenchFactors`, each wrapped in `<Suspense>` with a muted "Loading…" fallback.
+- **C — Vite `manualChunks`**: `vite.config.js` splits `recharts`, `react-markdown+remark-gfm`, `@tensorflow/tfjs`, and `@xenova/transformers` into their own async chunks.
+- **D — Lazy Markdown**: new `MarkdownRenderer.jsx` wrapper; `MessageBubble.jsx` and `StockScreenerPanel.jsx` import it lazily with Suspense + plain-text fallback.
+- **E — Pause work in hidden tabs**: `TickerBar.jsx` watches `document.visibilitychange`, skips feed fetches while hidden and refreshes on return. CSS also uses `[data-tab-hidden="true"] .ticker-scroll { animation-play-state: paused }` to halt the marquee without a re-render.
+- **F — Throttle ETA bar**: `ForecastPanel.jsx` + `ResultsPanel.jsx` interval `250ms → 500ms` (half the re-render rate, visually identical).
+- **G — Disable chart mount animations** on `DrawdownChart` and `RotationEquityChart` (already done elsewhere).
+- **H — `React.memo`** on `EquityCurve`, `EnsembleCard`, `DrawdownChart`, `RollingMetrics`, `MonthlyHeatmap`, `CorrelationMatrix`, `WeightDriftChart`, `RotationEquityChart`.
+- **I — In-flight dedup** in `TickerBar.jsx` via module-level `_inflight` promise so double-mount / StrictMode doesn't fire two feed requests.
+- **J — Prefetch ticker feed**: already satisfied — `TickerBar` mounts at app root and fetches immediately, then refreshes every 5 min.
+- **K — Cap ticker items** at `MAX_ITEMS = 30` in `TickerBar.jsx` (prevents DOM bloat if backend ever returns an oversized feed).
+- **L — `content-visibility: auto`**: new `.cv-auto` class in `globals.css` (`content-visibility: auto; contain-intrinsic-size: 1px 420px`), applied to forecast method cards, Ensemble, Kelly, Scenario, and Sentiment wrappers. Off-screen cards skip layout/paint until scrolled into view.
+
+**Why:** brief audit on user request to reduce browser load without risking regressions. All 12 suggestions accepted; every change is wrapping/deferring existing code, not changing behaviour. Charts still render identically when visible.
+
+**Files affected:**
+- `frontend/src/utils/exportExcel.js`, `portfolioTemplate.js`
+- `frontend/src/components/Layout/SplitView.jsx`
+- `frontend/vite.config.js`
+- `frontend/src/components/Chat/MarkdownRenderer.jsx` (new)
+- `frontend/src/components/Chat/MessageBubble.jsx`, `StockScreenerPanel.jsx`
+- `frontend/src/components/Layout/TickerBar.jsx`
+- `frontend/src/components/Dashboard/ForecastPanel.jsx`, `ResultsPanel.jsx`
+- `frontend/src/components/Dashboard/{EquityCurve,EnsembleCard,DrawdownChart,RollingMetrics,MonthlyHeatmap,CorrelationMatrix,WeightDriftChart,RotationEquityChart}.jsx`
+- `frontend/src/styles/globals.css`
+
+**State:** all 12 fixes applied; parser-checked the three files with significant structural edits. Not yet committed — awaiting user instruction.
+
+---
+
 ## 2026-04-21 — Branding + live rolling ticker bar
 
 Three linked changes to the app shell:

@@ -15,7 +15,7 @@
  *   Estimation. NeurIPS 30.
  */
 
-import { useMemo } from 'react'
+import { useMemo, memo } from 'react'
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -156,7 +156,7 @@ const ENSEMBLE_COLOR = '#c084fc'   // bright violet — distinct from all 6 base
 
 // ── Main card ─────────────────────────────────────────────────────────────────
 
-export default function EnsembleCard({ ensemble, regimeProbs, loading, lastValue }) {
+function EnsembleCard({ ensemble, regimeProbs, loading, lastValue }) {
   if (!ensemble && !loading) return null
 
   const chartData = useMemo(
@@ -306,3 +306,5 @@ export default function EnsembleCard({ ensemble, regimeProbs, loading, lastValue
     </div>
   )
 }
+
+export default memo(EnsembleCard)

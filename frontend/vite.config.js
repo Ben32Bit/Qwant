@@ -11,6 +11,18 @@ export default defineConfig({
       // onnxruntime-web is loaded from CDN via <script> in index.html;
       // externalizing prevents Rollup from trying to bundle WASM binaries.
       external: ['onnxruntime-web'],
+      output: {
+        // Split large third-party libraries into their own chunks. Benefits:
+        //  1. User navigating to a non-chart page doesn't download recharts.
+        //  2. Editing a component does not invalidate the library chunk hash,
+        //     so returning users replay libraries from the browser cache.
+        manualChunks: {
+          recharts:    ['recharts'],
+          markdown:    ['react-markdown', 'remark-gfm'],
+          tfjs:        ['@tensorflow/tfjs'],
+          transformers: ['@xenova/transformers'],
+        },
+      },
     },
   },
   server: {

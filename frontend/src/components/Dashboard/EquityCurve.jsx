@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react'
+import React, { useState, useMemo, useEffect, useRef, memo } from 'react'
 import {
   ResponsiveContainer,
   LineChart,
@@ -123,7 +123,7 @@ function formatDuration(startDate, endDate) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loading, onRangeChange }) {
+function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loading, onRangeChange }) {
   const [currency, setCurrency]  = useState('USD')
   const [startIdx, setStartIdx]  = useState(0)
   const [endIdx, setEndIdx]      = useState(0)   // 0 = uninitialised; set in effect below
@@ -316,3 +316,5 @@ export default function EquityCurve({ equityCurve, benchmarkCurve, fxCurves, loa
     </div>
   )
 }
+
+export default memo(EquityCurve)

@@ -1,4 +1,11 @@
-import * as XLSX from 'xlsx'
+// SheetJS (~400 KB) is dynamic-imported on first export so it doesn't ship
+// in the initial bundle — users who never click Export never download it.
+// After the first call `XLSX` is cached for the session.
+let XLSX = null
+async function loadXlsx() {
+  if (!XLSX) XLSX = await import('xlsx')
+  return XLSX
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -189,8 +196,9 @@ function buildMetricsSheet(metrics, portfolio) {
 
 // ── Main export function ──────────────────────────────────────────────────────
 
-export function exportToExcel(backtest, portfolio) {
+export async function exportToExcel(backtest, portfolio) {
   if (!backtest) return
+  await loadXlsx()
 
   const wb = XLSX.utils.book_new()
 

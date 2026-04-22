@@ -1,11 +1,11 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, memo } from 'react'
 import { heatmapColor } from '../../utils/chartConfig.js'
 import { fmtPct } from '../../utils/formatters.js'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-export default function MonthlyHeatmap({ monthlyReturns, loading }) {
+function MonthlyHeatmap({ monthlyReturns, loading }) {
   const { years, grid } = useMemo(() => {
     if (!monthlyReturns?.data) return { years: [], grid: {} }
     const years = Object.keys(monthlyReturns.data).sort()
@@ -100,3 +100,5 @@ export default function MonthlyHeatmap({ monthlyReturns, loading }) {
     </div>
   )
 }
+
+export default memo(MonthlyHeatmap)

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState, memo } from 'react'
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceArea, ReferenceLine, Legend,
@@ -95,7 +95,7 @@ function HoldingLegend({ colorMap }) {
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-export default function RotationEquityChart({ equityCurve, benchmarkCurve, holdingSchedule }) {
+function RotationEquityChart({ equityCurve, benchmarkCurve, holdingSchedule }) {
   const [scale, setScale] = useState('linear')
 
   // Assign a stable color per unique ticker across all windows
@@ -252,6 +252,7 @@ export default function RotationEquityChart({ equityCurve, benchmarkCurve, holdi
                 dot={false}
                 strokeDasharray="4 2"
                 connectNulls
+                isAnimationActive={false}
               />
             )}
 
@@ -263,6 +264,7 @@ export default function RotationEquityChart({ equityCurve, benchmarkCurve, holdi
               strokeWidth={2}
               dot={false}
               connectNulls
+              isAnimationActive={false}
             />
           </ComposedChart>
         </ResponsiveContainer>
@@ -299,3 +301,5 @@ export default function RotationEquityChart({ equityCurve, benchmarkCurve, holdi
     </div>
   )
 }
+
+export default memo(RotationEquityChart)
