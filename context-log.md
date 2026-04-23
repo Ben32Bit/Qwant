@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-04-24 — Forecast latency: parallelise tier-1/2 providers + skip tier-2 in Phase 1
+
+Forecast Phase 1 and Phase 2 were both bottlenecked on sequential provider I/O. Six providers (FRED macro + VIX, SEC insider, GDELT news, Reddit, Google Trends, EDGAR 10-K/10-Q) ran serially before any method dispatched in [forecast_engine.py](backend/app/services/forecast_engine.py) — cold-cache 5-ticker requests burned 30-50s on pure network I/O before any model touched the data. Tier-2 text providers also accreted across Phase 3/4/7 (commits `7636c15`, `006433b`, `96654e8`) without ever being folded into a parallel fan-out.
+
+### Changes
+
+1. **ThreadPoolExecutor fan-out** for all providers in `run_all_forecasts`. Each provider is independent and I/O-bound, so a single pool sized to `len(jobs)` runs them concurrently. Expected Phase 2 cold cost: 30-40s → 8-12s (bounded by slowest provider, usually pytrends).
+2. **Phase 1 skips tier-2 text providers** (news / reddit / trends / edgar). Phase 1 methods (xgboost / nbeats / factor) only consume `returns` in the model math — those providers are purely display metadata. Macro + insider still fetched on Phase 1 because macro is cached-cheap and insider drives XGBoost metadata pills.
+3. **Frontend propagation**: [useForecast.js:216](frontend/src/hooks/useForecast.js#L216) now also pulls `news_context` + `edgar_context` off the Phase 2 response, so the SentimentPanel still populates when Phase 1 returned empties.
+
+Net expected cold-cache win: **Phase 1 ~35s → ~2s**, **Phase 2 ~40s → ~10s**.
+
+Files: `backend/app/services/forecast_engine.py`, `frontend/src/hooks/useForecast.js`.
+
+---
+
 ## 2026-04-23 — Ticker feed: English-only headlines + faster refresh
 
 Two tweaks to the top-of-app scrolling ticker ([backend/app/routers/ticker.py](backend/app/routers/ticker.py)):

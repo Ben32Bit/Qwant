@@ -1019,12 +1019,117 @@ def run_all_forecasts(req) -> dict:
     forecast_end   = forecast_dates[-1] if forecast_dates else last_date
     hist_end_val   = float(req.equity_curve[-1]["value"]) if req.equity_curve else 1.0
 
-    # ── Tier 1 data: macro + VIX (best-effort; failures are non-fatal) ──────────
-    macro_ctx: dict = {}
-    try:
-        from .fred_provider import get_macro_features
-        from .vix_provider  import get_vix_features
-        macro_ctx = {**get_macro_features(last_date), **get_vix_features(last_date)}
+    # ── Data providers dispatched in parallel ───────────────────────────────────
+    #
+    # Previously these six providers (macro, insider, news, reddit, trends, edgar)
+    # ran serially before any method dispatch, turning a cold-cache 5-ticker
+    # request into 30-50s of sequential network I/O. They're all independent and
+    # I/O-bound, so a single ThreadPoolExecutor fans them out for a ~5-10× win.
+    #
+    # Phase 1 methods (xgboost / nbeats / factor) only use `returns` in the
+    # model math — tier-2 text providers (news / reddit / trends / edgar) are
+    # purely display metadata for those methods and are skipped to keep Phase 1
+    # at its advertised ~1-2s budget. They still run in Phase 2 where HMM / VAR
+    # / LSTM return the tier-2 context to the frontend for display.
+    tickers = [a.ticker for a in req.assets] if req.assets else []
+    weights = {a.ticker: a.weight for a in req.assets} if req.assets else {}
+
+    _PHASE2_SERVER_METHODS = {"hmm", "var", "lstm"}
+    is_phase2_request = any(m in _PHASE2_SERVER_METHODS for m in req.methods)
+
+    macro_ctx:  dict = {}
+    insider:    dict = {}
+    news_ctx:   dict = {}
+    reddit_ctx: dict = {}
+    trends_ctx: dict = {}
+    edgar_ctx:  dict = {}
+
+    from concurrent.futures import ThreadPoolExecutor as _CtxPool
+
+    def _safe_macro():
+        try:
+            from .fred_provider import get_macro_features
+            from .vix_provider  import get_vix_features
+            return {**get_macro_features(last_date), **get_vix_features(last_date)}
+        except Exception as exc:
+            logger.debug("Macro context skipped: %s", exc)
+            return {}
+
+    def _safe_insider():
+        if not tickers:
+            return {}
+        try:
+            from .sec_provider import get_insider_features
+            return get_insider_features(tickers, weights, last_date)
+        except Exception as exc:
+            logger.debug("SECProvider skipped: %s", exc)
+            return {}
+
+    def _safe_news():
+        if not tickers:
+            return {}
+        try:
+            from .news_provider import get_news_context
+            return get_news_context(tickers, weights, last_date)
+        except Exception as exc:
+            logger.debug("NewsProvider skipped: %s", exc)
+            return {}
+
+    def _safe_reddit():
+        if not tickers:
+            return {}
+        try:
+            from .reddit_provider import get_reddit_context
+            return get_reddit_context(tickers, last_date)
+        except Exception as exc:
+            logger.debug("RedditProvider skipped: %s", exc)
+            return {}
+
+    def _safe_trends():
+        if not tickers:
+            return {}
+        try:
+            from .trends_provider import get_trends_context
+            return get_trends_context(tickers, last_date)
+        except Exception as exc:
+            logger.debug("TrendsProvider skipped: %s", exc)
+            return {}
+
+    def _safe_edgar():
+        if not tickers:
+            return {}
+        try:
+            from .edgar_filing_provider import get_edgar_filing_context
+            return get_edgar_filing_context(tickers, weights, last_date)
+        except Exception as exc:
+            logger.debug("EDGARFiling skipped: %s", exc)
+            return {}
+
+    # Tier 1 always runs — macro is cached (cheap) and insider feeds xgboost
+    # metadata pills on both phases.
+    _provider_jobs = {
+        "macro":   _safe_macro,
+        "insider": _safe_insider,
+    }
+    if is_phase2_request:
+        _provider_jobs.update({
+            "news":   _safe_news,
+            "reddit": _safe_reddit,
+            "trends": _safe_trends,
+            "edgar":  _safe_edgar,
+        })
+
+    with _CtxPool(max_workers=len(_provider_jobs)) as _ctx_pool:
+        _ctx_futures = {name: _ctx_pool.submit(fn) for name, fn in _provider_jobs.items()}
+        macro_ctx  = _ctx_futures["macro"].result()   or {}
+        insider    = _ctx_futures["insider"].result() or {}
+        if is_phase2_request:
+            news_ctx   = _ctx_futures["news"].result()   or {}
+            reddit_ctx = _ctx_futures["reddit"].result() or {}
+            trends_ctx = _ctx_futures["trends"].result() or {}
+            edgar_ctx  = _ctx_futures["edgar"].result()  or {}
+
+    if macro_ctx:
         logger.info(
             "Macro context: YC=%.2f (pct=%.2f) VIX_rank=%.2f credit_pct=%.2f src=%s",
             macro_ctx.get("yield_curve_10y2y", 0),
@@ -1033,61 +1138,28 @@ def run_all_forecasts(req) -> dict:
             macro_ctx.get("credit_pct_rank", 0),
             macro_ctx.get("source", "?"),
         )
-    except Exception as exc:
-        logger.debug("Macro context skipped: %s", exc)
-
-    # ── Tier 1 data: insider trades (best-effort; failures are non-fatal) ────────
-    tickers = [a.ticker for a in req.assets] if req.assets else []
-    weights = {a.ticker: a.weight for a in req.assets} if req.assets else {}
-    insider = {}
-    if tickers:
-        try:
-            from .sec_provider import get_insider_features
-            insider = get_insider_features(tickers, weights, last_date)
-            if insider.get("available"):
-                logger.info(
-                    "SECProvider: portfolio net buying 30d = $%.1fM  (n=%d tickers)",
-                    insider["portfolio_net_buying_30d"],
-                    insider["n_tickers_with_data"],
-                )
-        except Exception as exc:
-            logger.debug("SECProvider skipped: %s", exc)
-
-    # ── Tier 2 data: news / reddit / trends (best-effort; non-fatal) ─────────────
-    news_ctx: dict    = {}
-    reddit_ctx: dict  = {}
-    trends_ctx: dict  = {}
-    if tickers:
-        try:
-            from .news_provider import get_news_context
-            news_ctx = get_news_context(tickers, weights, last_date)
-            logger.info("NewsProvider: %d total articles", news_ctx.get("portfolio_summary", {}).get("total_articles", 0))
-        except Exception as exc:
-            logger.debug("NewsProvider skipped: %s", exc)
-        try:
-            from .reddit_provider import get_reddit_context
-            reddit_ctx = get_reddit_context(tickers, last_date)
-            logger.info("RedditProvider: %d total mentions", reddit_ctx.get("portfolio_summary", {}).get("total_mentions", 0))
-        except Exception as exc:
-            logger.debug("RedditProvider skipped: %s", exc)
-        try:
-            from .trends_provider import get_trends_context
-            trends_ctx = get_trends_context(tickers, last_date)
-        except Exception as exc:
-            logger.debug("TrendsProvider skipped: %s", exc)
-
-    # ── EDGAR 10-K/10-Q filing excerpts (best-effort; non-fatal) ─────────────────
-    edgar_ctx: dict = {}
-    if tickers:
-        try:
-            from .edgar_filing_provider import get_edgar_filing_context
-            edgar_ctx = get_edgar_filing_context(tickers, weights, last_date)
+    if insider.get("available"):
+        logger.info(
+            "SECProvider: portfolio net buying 30d = $%.1fM  (n=%d tickers)",
+            insider["portfolio_net_buying_30d"],
+            insider["n_tickers_with_data"],
+        )
+    if is_phase2_request:
+        if news_ctx:
+            logger.info(
+                "NewsProvider: %d total articles",
+                news_ctx.get("portfolio_summary", {}).get("total_articles", 0),
+            )
+        if reddit_ctx:
+            logger.info(
+                "RedditProvider: %d total mentions",
+                reddit_ctx.get("portfolio_summary", {}).get("total_mentions", 0),
+            )
+        if edgar_ctx:
             logger.info(
                 "EDGARFiling: %d tickers with 10-K/10-Q excerpts",
                 edgar_ctx.get("tickers_with_data", 0),
             )
-        except Exception as exc:
-            logger.debug("EDGARFiling skipped: %s", exc)
 
     _hmm_out_extras: dict = {}   # populated during HMM dispatch for regime/ensemble
 

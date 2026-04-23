@@ -213,6 +213,10 @@ export function useForecast(backtest, portfolio) {
         if (!res.ok) throw new Error(`Forecast phase 2 failed: ${res.status}`)
         p2Data = await res.json()
         setPhase2(p2Data)
+        // Tier-2 context providers are skipped in Phase 1 to hit the ~1-2s
+        // latency budget; they're fetched in Phase 2 and propagated here.
+        if (p2Data?.news_context)  setNewsContext(p2Data.news_context)
+        if (p2Data?.edgar_context) setEdgarContext(p2Data.edgar_context)
         setTiming(t => ({ ...t, phase2Ms: Date.now() - (p2Start.current ?? Date.now()) }))
       } finally {
         clearTimeout(p2Timeout)
