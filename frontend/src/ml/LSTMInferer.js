@@ -1,38 +1,44 @@
 /**
  * LSTMInferer.js — Browser-side Attention-LSTM inference via TensorFlow.js
  *
- * PATCHED: correct feature rollout (Priority 5 fix).
- * The previous version only updated feature[0] with the model's *output*
- * scalar and left features[1..4] (vol_21d, mom_5d, mom_21d, rsi_14) frozen
- * at historical values for the entire 252-day horizon. That produced
- * mathematically invalid forecasts after day 1.
+ * Contract: scale-invariant features (NO MinMaxScaler).
+ * Features are bounded in ~[-1, 1] by construction, so one model generalises
+ * across assets / vol regimes without per-portfolio scaler drift.
  *
- * The corrected rollout maintains a buffer of the most recent scaled
- * returns, rebuilds all 5 features each step by mirroring the server's
- * prepare_lstm_features formulas, and re-scales them with the same
- * MinMaxScaler the server fit.
+ *   [0] z_ret       = r_t / σ_21d, clipped ±3, /3         ∈ [-1, 1]
+ *   [1] vol_pct     = percentile of σ_63 in 5y window     ∈ [-1, 1]
+ *   [2] z_mom5      = sum_5 / (σ_5 √5), clipped ±3, /3    ∈ [-1, 1]
+ *   [3] z_mom21     = sum_21 / (σ_21 √21), clipped ±3, /3 ∈ [-1, 1]
+ *   [4] rsi_centred = 2 * rsi_14 - 1                      ∈ [-1, 1]
+ *
+ * The model outputs next-day z_ret (tanh, bounded [-1, 1]). Unscale via:
+ *   z_pred = model_out * CLIP_SIGMAS
+ *   r_pred = z_pred * σ_21d_current
+ *
+ * Must stay in lockstep with:
+ *   backend/app/services/forecast_engine.py::prepare_lstm_features
+ *   backend/scripts/train_lstm.py
  */
 
 const MODEL_URL    = '/models/lstm/model.json'
 const N_MC_PASSES  = 200
 const TRADING_DAYS = 252
+const LOOKBACK     = 60
+const CLIP_SIGMAS  = 3.0
 
 // ── Sense-check envelope for the autoregressive rollout ───────────────────────
-// MC Dropout × 252-step autoregression on a small LSTM can produce pathological
-// paths: the scaler saturates once the simulated return distribution drifts
-// outside training range, which then feeds scaled values that push the next
-// prediction further out of distribution. These envelopes bound the damage.
-const DAILY_CLIP_SIGMAS   = 3      // per-step return clip, multiples of training σ
+// With scale-invariant features the rollout is far more stable (features can't
+// saturate a scaler), but MC Dropout × 252-step autoregression on a small LSTM
+// can still produce tails beyond what's realistic. These envelopes bound it.
 const CUM_CLIP_LO         = -0.60  // hard floor on cumulative return per path
-const CUM_CLIP_HI         = 2.00   // hard ceiling on cumulative return per path
-const MIN_SURVIVOR_FRAC   = 0.20   // <20% survivors → the whole run is untrustworthy
-const PLAUSIBILITY_21D    = 0.25   // |median 21d| must be within 25%
-const SATURATION_THRESH   = 2.0    // |scaled| > 2 counts as out-of-range
-const SATURATION_STEPS    = 5      // N consecutive out-of-range steps ⇒ path diverged
+const CUM_CLIP_HI         =  2.00  // hard ceiling on cumulative return per path
+const MIN_SURVIVOR_FRAC   =  0.20  // <20% survivors → whole run is untrustworthy
+const PLAUSIBILITY_21D    =  0.25  // |median 21d| must be within ±25%
+const PER_STEP_RETURN_CLIP =  0.15 // per-step raw return capped at ±15%
 
-// Feature order must match server's prepare_lstm_features exactly:
-//   [r, vol_21d, mom_5d, mom_21d, rsi_14]
-const F_RET = 0, F_VOL = 1, F_MOM5 = 2, F_MOM21 = 3, F_RSI = 4
+// Feature order MUST match server's prepare_lstm_features exactly:
+//   [z_ret, vol_pct, z_mom5, z_mom21, rsi_centred]
+const F_Z_RET = 0, F_VOL_PCT = 1, F_Z_MOM5 = 2, F_Z_MOM21 = 3, F_RSI_C = 4
 
 let _model = null
 let _tf    = null
@@ -43,7 +49,6 @@ async function getModel() {
     _tf = await import('@tensorflow/tfjs')
     await _tf.ready()
   }
-  // Pre-flight: sniff the JSON manifest before letting TF.js swallow the cause
   const headRes = await fetch(MODEL_URL, { method: 'HEAD' })
   if (!headRes.ok) {
     throw new Error(
@@ -66,89 +71,97 @@ async function getModel() {
   return _model
 }
 
-// ── Feature recomputation helpers (inverse then forward of server's scaler) ──
+// ── Feature recomputation helpers (match server's prepare_lstm_features) ─────
 
-function unscale(scaledVal, minArr, maxArr, idx) {
-  // feature_range=(-1, 1):  scaled = 2 * (x - min) / (max - min) - 1
-  // inverse:                x = (scaled + 1) * (max - min) / 2 + min
-  return (scaledVal + 1) * (maxArr[idx] - minArr[idx]) / 2 + minArr[idx]
+function rollingStd(arr, from, to) {
+  // Sample std over arr[from..to) — matches pandas Series.rolling(N).std() (ddof=1)
+  const n = to - from
+  if (n <= 1) return 0
+  let mean = 0
+  for (let i = from; i < to; i++) mean += arr[i]
+  mean /= n
+  let ssq = 0
+  for (let i = from; i < to; i++) {
+    const d = arr[i] - mean
+    ssq += d * d
+  }
+  return Math.sqrt(ssq / (n - 1))
 }
 
-function scale(rawVal, minArr, maxArr, idx) {
-  const range = maxArr[idx] - minArr[idx]
-  if (range === 0) return 0
-  return 2 * (rawVal - minArr[idx]) / range - 1
-}
+function clamp(x, lo, hi) { return x < lo ? lo : x > hi ? hi : x }
 
 /**
- * Rebuild all 5 scaled features for a new time step, given a buffer of
- * recent *raw* (unscaled) returns.
+ * Rebuild all 5 scale-invariant features for the newest time step from the
+ * raw-return buffer and a rolling 63d-vol history (for vol_pct ranking).
  *
- * Mirrors backend/app/services/forecast_engine.py::prepare_lstm_features.
- * The buffer must contain AT LEAST the last 21 raw returns so we can compute
- * vol_21d and mom_21d. RSI-14 needs 15+ for the diff-based rolling mean.
+ * @param {number[]} rawReturns   — raw returns, length ≥ 64 (21d vol buffer + RSI + shift)
+ * @param {number[]} sigma63Hist  — trailing 63d-vol history for percentile ranking
  */
-function buildScaledFeatureRow(rawReturns, minArr, maxArr) {
+function buildZFeatureRow(rawReturns, sigma63Hist) {
   const n = rawReturns.length
-  if (n < 21) {
-    throw new Error(`LSTM rollout needs ≥21 raw returns in buffer, got ${n}`)
+  if (n < 64) {
+    throw new Error(`LSTM rollout needs ≥64 raw returns in buffer, got ${n}`)
   }
+
+  // ── Causal rolling stds: use returns up to (but NOT including) the newest ──
+  const sigma21 = rollingStd(rawReturns, n - 22, n - 1)  // r_{t-21..t-1}
+  const sigma5  = rollingStd(rawReturns, n - 6,  n - 1)  // r_{t-5..t-1}
+  const sigma63 = rollingStd(rawReturns, n - 64, n - 1)  // r_{t-63..t-1}
 
   const last = rawReturns[n - 1]
 
-  // vol_21d (annualised std of last 21 returns)
-  let mean = 0
-  for (let i = n - 21; i < n; i++) mean += rawReturns[i]
-  mean /= 21
-  let ssq = 0
-  for (let i = n - 21; i < n; i++) {
-    const d = rawReturns[i] - mean
-    ssq += d * d
-  }
-  const vol21 = Math.sqrt(ssq / 21) * Math.sqrt(TRADING_DAYS)
+  // z_ret: today's return in units of prior σ_21d
+  const zRetRaw = last / (sigma21 + 1e-9)
+  const zRet    = clamp(zRetRaw, -CLIP_SIGMAS, CLIP_SIGMAS) / CLIP_SIGMAS
 
-  // mom_5d, mom_21d (cumulative sum — matches server's rolling(N).sum())
+  // Momentum z-scores
   let mom5 = 0, mom21 = 0
   for (let i = n - 5;  i < n; i++) mom5  += rawReturns[i]
   for (let i = n - 21; i < n; i++) mom21 += rawReturns[i]
+  const zMom5Raw  = mom5  / (sigma5  * Math.sqrt(5)  + 1e-9)
+  const zMom21Raw = mom21 / (sigma21 * Math.sqrt(21) + 1e-9)
+  const zMom5     = clamp(zMom5Raw,  -CLIP_SIGMAS, CLIP_SIGMAS) / CLIP_SIGMAS
+  const zMom21    = clamp(zMom21Raw, -CLIP_SIGMAS, CLIP_SIGMAS) / CLIP_SIGMAS
 
-  // RSI-14: rolling mean of gains vs losses over last 14 diffs
-  const diffs = []
-  for (let i = n - 14; i < n; i++) diffs.push(rawReturns[i] - rawReturns[i - 1])
+  // Vol percentile: fraction of sigma63Hist entries ≤ current sigma63, mapped to [-1, 1]
+  let belowCount = 0
+  const histLen = sigma63Hist.length
+  for (let i = 0; i < histLen; i++) if (sigma63Hist[i] <= sigma63) belowCount += 1
+  const volPctRaw = histLen > 0 ? belowCount / histLen : 0.5
+  const volPct    = clamp(2.0 * volPctRaw - 1.0, -1, 1)
+
+  // RSI-14 over last 14 diffs of the raw return series (matches server's
+  // delta = r.diff(); gain/loss rolling(14).mean())
   let gain = 0, loss = 0
-  for (const d of diffs) {
+  for (let i = n - 14; i < n; i++) {
+    const d = rawReturns[i] - rawReturns[i - 1]
     if (d > 0) gain += d
     else       loss -= d
   }
   gain /= 14; loss /= 14
-  const rsi14 = gain / (gain + loss + 1e-9)
+  const rsi14    = gain / (gain + loss + 1e-9)
+  const rsiCent  = clamp(2.0 * rsi14 - 1.0, -1, 1)
 
-  return [
-    scale(last,   minArr, maxArr, F_RET),
-    scale(vol21,  minArr, maxArr, F_VOL),
-    scale(mom5,   minArr, maxArr, F_MOM5),
-    scale(mom21,  minArr, maxArr, F_MOM21),
-    scale(rsi14,  minArr, maxArr, F_RSI),
-  ]
+  return [zRet, volPct, zMom5, zMom21, rsiCent]
 }
 
 /**
  * Run Attention-LSTM MC Dropout inference.
  *
  * @param {Object} params
- * @param {number[][]}  params.seedWindow    — (60 × 5) scaled feature window from server
- * @param {string[]}    params.forecastDates — business-day dates for the horizon
- * @param {number[]}    params.scalerMin     — 5 MinMaxScaler data_min_ values (one per feature)
- * @param {number[]}    params.scalerMax     — 5 MinMaxScaler data_max_ values (one per feature)
- * @param {number[]}    [params.rawReturnSeed] — last 22+ raw returns from the portfolio
- * @param {number}      [params.nPasses=200]
+ * @param {number[][]} params.seedWindow        — (60 × 5) scale-invariant window
+ * @param {string[]}   params.forecastDates     — business-day forecast dates
+ * @param {number[]}   params.rawReturnSeed     — last ≥128 raw returns from the portfolio
+ * @param {number}     params.currentSigma21d   — current σ_21d (for unscaling z-preds)
+ * @param {number[]}   [params.sigma63History]  — trailing 5y σ_63 distribution for vol_pct rank
+ * @param {number}     [params.nPasses=200]
  */
 export async function inferLSTM({
   seedWindow,
   forecastDates,
-  scalerMin,
-  scalerMax,
-  rawReturnSeed = null,
+  rawReturnSeed,
+  currentSigma21d,
+  sigma63History = null,
   nPasses = N_MC_PASSES,
 }) {
   // ── Input contract validation ───────────────────────────────────────────────
@@ -156,16 +169,17 @@ export async function inferLSTM({
     throw new Error('inferLSTM: seedWindow must be a non-empty array')
   if (!Array.isArray(seedWindow[0]))
     throw new Error(
-      `inferLSTM: seedWindow must be 2D (lookback × features); got 1D. ` +
-      `LSTM requires the full 5-feature window from the server.`
+      `inferLSTM: seedWindow must be 2D (lookback × features); got 1D.`,
     )
-  if (!Array.isArray(scalerMin) || scalerMin.length !== seedWindow[0].length)
+  if (!Array.isArray(rawReturnSeed) || rawReturnSeed.length < 64)
     throw new Error(
-      `inferLSTM: scalerMin must be an array of ${seedWindow[0].length} elements (one per feature); ` +
-      `got ${Array.isArray(scalerMin) ? `length ${scalerMin.length}` : typeof scalerMin}`
+      `inferLSTM: rawReturnSeed must be an array of ≥64 raw returns; ` +
+      `got ${Array.isArray(rawReturnSeed) ? `length ${rawReturnSeed.length}` : typeof rawReturnSeed}`,
     )
-  if (!Array.isArray(scalerMax) || scalerMax.length !== seedWindow[0].length)
-    throw new Error(`inferLSTM: scalerMax array length must match feature count`)
+  if (!Number.isFinite(currentSigma21d) || currentSigma21d <= 0)
+    throw new Error(
+      `inferLSTM: currentSigma21d must be a positive number; got ${currentSigma21d}`,
+    )
 
   const tf      = _tf ?? await import('@tensorflow/tfjs')
   const model   = await getModel()
@@ -173,27 +187,19 @@ export async function inferLSTM({
   const lookback  = seedWindow.length
   const nFeatures = seedWindow[0].length
 
-  // Seed the raw return buffer from rawReturnSeed if provided, else unscale from window
-  const seedRaw = rawReturnSeed && rawReturnSeed.length >= 22
-    ? rawReturnSeed.slice(-Math.max(lookback, 22))
-    : seedWindow.map(row => unscale(row[F_RET], scalerMin, scalerMax, F_RET))
-
-  // Training-distribution per-day σ for the ±3σ clip — estimated from the seed
-  // buffer, which IS the historical raw return series.
-  const seedMean = seedRaw.reduce((a, b) => a + b, 0) / seedRaw.length
-  const seedVar  = seedRaw.reduce((s, v) => s + (v - seedMean) ** 2, 0) / Math.max(1, seedRaw.length - 1)
-  const seedStd  = Math.sqrt(seedVar) || 0.015  // fallback ~1.5% if degenerate
-  const dailyClip = DAILY_CLIP_SIGMAS * seedStd
-
-  // Per-pass state: each pass gets its own diverging window + return buffer
-  let windows = Array.from({ length: nPasses }, () =>
-    seedWindow.map(row => [...row])
-  )
-  const rawBufs  = Array.from({ length: nPasses }, () => [...seedRaw])
+  // Per-pass state: each pass rolls out an independent diverging path.
+  const windows  = Array.from({ length: nPasses }, () => seedWindow.map(row => [...row]))
+  const rawBufs  = Array.from({ length: nPasses }, () => [...rawReturnSeed])
   const cumRs    = new Float64Array(nPasses)
   const allPaths = Array.from({ length: nPasses }, () => new Array(horizon))
-  const saturCtr = new Int16Array(nPasses)          // consecutive saturated steps
-  const diverged = new Uint8Array(nPasses)          // 1 = path frozen at envelope
+  const diverged = new Uint8Array(nPasses)
+
+  // Prefer the server-provided 5y σ_63 distribution (matches training's vol_pct
+  // rank window exactly). Fall back to a 128-sample locally-computed buffer
+  // only if the server didn't send one.
+  const sigma63Hist = Array.isArray(sigma63History) && sigma63History.length > 0
+    ? sigma63History.slice()
+    : buildSigma63History(rawReturnSeed)
 
   for (let t = 0; t < horizon; t++) {
     const flatData = new Float32Array(nPasses * lookback * nFeatures)
@@ -213,21 +219,16 @@ export async function inferLSTM({
 
     for (let p = 0; p < nPasses; p++) {
       if (diverged[p]) {
-        // Freeze diverged paths at their last cumulative return — this keeps
-        // the tensor shape consistent without letting the pathology propagate.
         allPaths[p][t] = cumRs[p]
         continue
       }
 
-      const rScaled = preds[p]
+      // Model output is bounded [-1, 1] (tanh); unscale to raw return.
+      // z_pred = model_out * CLIP_SIGMAS ; r_pred = z_pred * σ_21d_current
+      const zPred = preds[p] * CLIP_SIGMAS
+      let   rReal = zPred * currentSigma21d
+      rReal = clamp(rReal, -PER_STEP_RETURN_CLIP, PER_STEP_RETURN_CLIP)
 
-      // Guard 1: per-step return clip to ±Nσ of the training daily-return std.
-      let rReal = unscale(rScaled, scalerMin, scalerMax, F_RET)
-      if      (rReal >  dailyClip) rReal =  dailyClip
-      else if (rReal < -dailyClip) rReal = -dailyClip
-
-      // Guard 2: hard envelope on cumulative return — nothing realistic ranges
-      // outside [−60%, +200%] on a 1y horizon.
       let cum = (1 + cumRs[p]) * (1 + rReal) - 1
       if      (cum > CUM_CLIP_HI) { cum = CUM_CLIP_HI; diverged[p] = 1 }
       else if (cum < CUM_CLIP_LO) { cum = CUM_CLIP_LO; diverged[p] = 1 }
@@ -235,21 +236,9 @@ export async function inferLSTM({
       allPaths[p][t] = cum
 
       rawBufs[p].push(rReal)
-      if (rawBufs[p].length > 64) rawBufs[p].shift()
+      if (rawBufs[p].length > 128) rawBufs[p].shift()
 
-      const newRow = buildScaledFeatureRow(rawBufs[p], scalerMin, scalerMax)
-
-      // Guard 3: scaler-saturation detector. If this pass's new feature row
-      // sits persistently outside the training scaler range, the model is
-      // operating off-distribution and its outputs are unreliable.
-      let anySat = false
-      for (let f = 0; f < newRow.length; f++) {
-        if (Math.abs(newRow[f]) > SATURATION_THRESH) { anySat = true; break }
-      }
-      if (anySat) saturCtr[p] += 1
-      else        saturCtr[p]  = 0
-      if (saturCtr[p] >= SATURATION_STEPS) diverged[p] = 1
-
+      const newRow = buildZFeatureRow(rawBufs[p], sigma63Hist)
       windows[p] = [...windows[p].slice(1), newRow]
     }
   }
@@ -260,8 +249,8 @@ export async function inferLSTM({
   if (survivorPaths.length / nPasses < MIN_SURVIVOR_FRAC) {
     throw new Error(
       `LSTM rollout diverged: only ${survivorPaths.length}/${nPasses} paths stayed ` +
-      `within the sanity envelope. Model is operating off-distribution for this ` +
-      `return series (likely unusual volatility or drift vs training data).`,
+      `within the sanity envelope. The model may be out-of-distribution for this ` +
+      `return series — try retraining (see .github/workflows/retrain-lstm.yml).`,
     )
   }
 
@@ -282,19 +271,31 @@ export async function inferLSTM({
     p95[t] = vals[Math.min(n - 1, Math.floor(0.95 * n))] * 100
   }
 
-  // Guard 4: post-hoc plausibility gate on the 21-day median.  Even if enough
-  // paths survive, a 21d median outside ±25% is almost certainly rollout
-  // pathology — surface it as an error rather than drawing a fantasy number.
   const idx21 = Math.min(20, horizon - 1)
   if (Math.abs(p50[idx21] / 100) > PLAUSIBILITY_21D) {
     throw new Error(
       `LSTM rollout implausible: 21d median of ${p50[idx21].toFixed(1)}% exceeds ` +
-      `±${(PLAUSIBILITY_21D * 100).toFixed(0)}% envelope. Training distribution likely ` +
-      `doesn't match this portfolio's return regime.`,
+      `±${(PLAUSIBILITY_21D * 100).toFixed(0)}% envelope.`,
     )
   }
 
   return { dates: forecastDates, p5, p25, p50, p75, p95 }
+}
+
+/**
+ * Compute the trailing 63d-vol history used for the vol_pct percentile feature.
+ * Slides a 63-wide window and records the sample std at each position.
+ * Returns an array of length max(0, rawReturnSeed.length - 63 + 1).
+ */
+function buildSigma63History(rawReturnSeed) {
+  const n = rawReturnSeed.length
+  const win = 63
+  if (n < win) return []
+  const hist = new Array(n - win + 1)
+  for (let i = 0; i + win <= n; i++) {
+    hist[i] = rollingStd(rawReturnSeed, i, i + win)
+  }
+  return hist
 }
 
 export function isModelLoaded() {

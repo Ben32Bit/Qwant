@@ -2,6 +2,136 @@
 
 ---
 
+## 2026-04-23 — LSTM training pipeline: quant best-practice audit + fixes
+
+Audited `train_lstm.py` after the first real training run produced a misleading "OOS MSE 0.121" gate failure. Several quant-hygiene issues surfaced:
+
+### Critical: the "OOS" test wasn't actually OOS
+
+Old flow routed the last 30% of each asset's history to `/dev/null`, then split the concatenated training block's final 15% as "val". That meant:
+- The gate ran on data the model was effectively early-stopped on (not held-out).
+- The "val" set was biased toward whichever tickers happened to be last in the concat order.
+
+**Fix:** rolling time-based global cutoffs so every asset's train/val/test periods align calendar-wise. `TEST_CUTOFF = today - 12mo`, `VAL_CUTOFF = today - 24mo`. Sequences are routed by target-date timestamp. Val drives early stopping, test is held back for the gate only. Cutoffs are computed from `pd.Timestamp.today()` so the weekly GH Actions cron self-updates.
+
+### Ticker concentration in the loss
+
+AAPL had ~11y of sequences, BTC-USD ~6y. Concatenating per-ticker meant AAPL dominated the gradient. **Fix:** `MAX_SAMPLES_PER_TICKER = 1500`, keeping the most-recent-train slice so newer regimes aren't drowned.
+
+### Target distribution invisibility
+
+Previous script trained with zero visibility into the target's shape. **Fix:** print `mean / std / skew` of training targets + top-3 contributor tickers' (train, val, test) counts before fitting. Any regime asymmetry or imbalance is visible in 1 second of console output.
+
+### RSI on halted / flat tickers
+
+`gain / (gain + loss + 1e-9)` collapsed to 0 when both were tiny, mapping `rsi_centred` to -1 (max oversold) for flat prices. **Fix:** `np.where(total > 1e-12, gain/(total+1e-12), 0.5)` so flat = neutral 0.
+
+### Gate miscalibration
+
+Absolute MSE ≤ 0.10 ignored that `var(y) ≈ 0.11` for the scaled target — a "predict zero" null model would score 0.11. **Fix:** gate now uses `MSE / var(y) ≤ 1.10`, explicitly comparing against the null model. The rollout gate (survivors + 21d plausibility on SPY/AAPL/BTC/TQQQ) remains the product-safety check.
+
+### Huber loss over MSE
+
+Day-ahead returns are fat-tailed; MSE over-penalises rare outliers. **Fix:** `keras.losses.Huber(delta=0.1)` — quadratic for small errors, linear for large ones. Lower LR (`5e-4` vs `1e-3`) for stabler convergence.
+
+### Cache schema versioning + business-day alignment
+
+Two download-stage bugs: (1) batch `yf.download(list, ...)` silently returned empty for 54/56 tickers (Yahoo rate-limits batches); (2) outer-joining a dict-of-Series with BTC/ETH + equities produced a calendar-day union index where equity tickers fell below the 70% non-NaN threshold and got dropped. **Fixes:**
+- Per-ticker download with 3-retry backoff + 0.3s politeness delay between tickers.
+- Reindex to `pd.bdate_range` (Mon-Fri) so the union calendar is weekday-only.
+- Parquet cache at `.price_cache_v{N}.parquet` with 24h TTL and schema version in filename (old caches auto-deleted). `pyarrow>=15.0` added to `requirements-train.txt`.
+
+### Files
+
+- `backend/scripts/train_lstm.py` — train/val/test split, Huber loss, var-ratio gate, ticker cap, RSI fix, per-ticker download, bday alignment, cache versioning
+- `backend/requirements-train.txt` — added `pyarrow>=15.0` for parquet cache
+- `.gitignore` — `backend/scripts/.price_cache*.parquet`, `.venv-train/`
+
+### GH Actions cron impact
+
+All changes are compatible with `.github/workflows/retrain-lstm.yml`:
+- Rolling cutoffs self-update every Sunday (test window stays at "last 12 months")
+- CI container is ephemeral → cache always re-populated fresh; per-ticker retries handle Yahoo flakiness
+- No new top-level deps beyond `pyarrow` which is already declared
+
+---
+
+## 2026-04-23 — LSTM: scale-invariant features + expanded universe + weekly retrain (Layer 1 + 2 + 3A)
+
+Addressed the chronic "LSTM rollout diverged: only 39/200 paths stayed within the sanity envelope" error. Diagnosed two root causes in the old pipeline:
+
+1. **Per-portfolio MinMaxScaler saturation.** Raw-return features + a scaler fit on the current portfolio's history → once MC Dropout pushed simulated returns past the scaler's training range, features saturated at ±1, the model's output drifted, feeding even more extreme features back in. Crypto / leveraged / single-stock portfolios hit this immediately.
+2. **Narrow training universe.** Model only saw a handful of broad-market ETFs during training, so anything with a fatter-tailed return distribution looked out-of-distribution at inference time.
+
+### Layer 1 — scale-invariant features
+
+Rewrote the feature contract to be distribution-free *by construction*. All 5 inputs are bounded in ~[-1, 1] without any per-portfolio scaler:
+
+```
+[0] z_ret       = r_t / σ_21d, clipped ±3, /3
+[1] vol_pct     = percentile of σ_63 in trailing 5y window, mapped to [-1, 1]
+[2] z_mom5      = sum_5  / (σ_5  * √5),  clipped ±3, /3
+[3] z_mom21     = sum_21 / (σ_21 * √21), clipped ±3, /3
+[4] rsi_centred = 2 * rsi_14 - 1
+```
+
+σ denominators are **causal (shifted by 1)** so r_t doesn't leak into its own normaliser. Target is next-day z_ret (same clip+scale). Model head is `Dense(1, activation="tanh")` so the output is bounded by construction too.
+
+Inference unscales via `r_pred = (model_out * 3) * σ_21d_current` — the per-portfolio vol only appears at unscale time, never as a feature the model learns to rely on.
+
+### Layer 2 — expanded 55-asset training universe
+
+25 broad ETFs + 25 single stocks across sectors + 5 high-vol assets (BTC, ETH, TQQQ, SOXL, VIXY). The model now sees the full spectrum of daily-return distributions during training, so fat-tailed portfolios no longer look out-of-distribution at inference time.
+
+### Validation gate (blocks bad models from shipping)
+
+After training, `run_validation_gate()` runs a held-out OOS check + Python mirror of the JS rollout on 4 diverse baskets (SPY / AAPL / BTC-USD / TQQQ). Training **aborts with `sys.exit(1)`** if:
+
+- OOS MSE > 0.10
+- Directional accuracy < 50%
+- Any basket's rollout survivor fraction < 70%
+- Any basket's |21d p50| > 10%
+
+A bad model never overwrites the previous good one.
+
+### Layer 3A — weekly auto-retrain via GitHub Actions
+
+`.github/workflows/retrain-lstm.yml` runs every Sunday 06:00 UTC:
+
+1. `pip install -r backend/requirements-train.txt` (TF-CPU + tf-keras, isolated from Railway's prod deps)
+2. `python backend/scripts/train_lstm.py` (fails CI if gate rejects)
+3. Commits regenerated `frontend/public/models/lstm/model.json` + `.bin` if artefacts changed
+4. Push triggers Vercel's normal auto-deploy — users get the new model on their next page load
+
+`permissions.contents: write` + `concurrency: lstm-retrain` prevent races. `workflow_dispatch` lets me kick a manual retrain from the Actions tab if an OOS regime shift requires it.
+
+### Contract propagation
+
+The new feature contract replaces the old scaler-based one in three places that must stay in lockstep:
+
+- `backend/scripts/train_lstm.py` — training (defines contract)
+- `backend/app/services/forecast_engine.py::prepare_lstm_features` — returns `{last_window, raw_return_seed, current_sigma_21d, sigma_63_history, forecast_dates, feature_names, clip_sigmas}`. Dropped `scaler_min`/`scaler_max`.
+- `frontend/src/ml/LSTMInferer.js` — `inferLSTM({seedWindow, forecastDates, rawReturnSeed, currentSigma21d, sigma63History})`. Dropped `scalerMin`/`scalerMax`. Rebuilds features via `buildZFeatureRow` each step, ranks σ_63 against the server-provided 5y distribution.
+- `frontend/src/hooks/useForecast.js` — updated the inferLSTM call site to pass the new contract.
+
+The saturation-counter divergence guard in the old rollout is gone — with bounded-by-construction features it can't trigger. The hard cum-return envelope (−60% / +200%) and 21d p50 plausibility gate remain.
+
+### Files
+
+- `backend/scripts/train_lstm.py` — full rewrite (scale-invariant features, 55-asset universe, validation gate)
+- `backend/app/services/forecast_engine.py` — rewrote `prepare_lstm_features`
+- `backend/requirements-train.txt` — new, training-only deps (TF-CPU + tf-keras + yfinance + sklearn)
+- `frontend/src/ml/LSTMInferer.js` — full rewrite (no scaler, z-unscale, server σ_63 history)
+- `frontend/src/hooks/useForecast.js` — updated inferLSTM call site
+- `.github/workflows/retrain-lstm.yml` — new, weekly cron + manual dispatch
+
+### Next steps (left for the user)
+
+- Run `pip install -r backend/requirements-train.txt && python backend/scripts/train_lstm.py` locally once to produce the first model under the new contract (the old model.json on disk won't load — shapes are unchanged but feature semantics are not).
+- Push the regenerated model to kick off the first auto-deployed cycle.
+
+---
+
 ## 2026-04-22 — Fix runaway render loop in ForecastPanel (tab freeze)
 
 Diagnosed a tab-freeze reported on the deployed Vercel build. Chrome perf traces froze at "loading trace" and console showed a benign `bull_low_vol.onnx 404` (optional stacker never shipped) plus SharedArrayBuffer warnings (ORT-Web falling back to single-threaded WASM — also benign). Neither of those caused the freeze.

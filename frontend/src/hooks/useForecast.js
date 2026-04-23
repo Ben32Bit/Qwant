@@ -260,11 +260,11 @@ export function useForecast(backtest, portfolio) {
     try {
       const { inferLSTM } = await import('../ml/LSTMInferer.js')
       const band = await inferLSTM({
-        seedWindow:    lstmFeatures.last_window,
-        forecastDates: lstmFeatures.forecast_dates,
-        scalerMin:     lstmFeatures.scaler_min,
-        scalerMax:     lstmFeatures.scaler_max,
-        rawReturnSeed: lstmFeatures.raw_return_seed,
+        seedWindow:      lstmFeatures.last_window,
+        forecastDates:   lstmFeatures.forecast_dates,
+        rawReturnSeed:   lstmFeatures.raw_return_seed,
+        currentSigma21d: lstmFeatures.current_sigma_21d,
+        sigma63History:  lstmFeatures.sigma_63_history,
       })
       const lstmMs = Date.now() - (lstmStart.current ?? Date.now())
       setTiming(t => ({ ...t, lstmMs }))

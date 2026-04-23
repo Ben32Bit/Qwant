@@ -10,6 +10,7 @@ build/
 .eggs/
 venv/
 .venv/
+.venv-train/
 env/
 *.egg
 
@@ -41,6 +42,9 @@ npm-debug.log*
 
 # yfinance cache
 .yfinance_cache/
+backend/scripts/.price_cache*.parquet
+backend/scripts/lstm_model.keras
+backend/scripts/lstm_model.h5
 
 # Local scratch directories (Claude diagnostic / fix drops)
 Opus Fix_*/

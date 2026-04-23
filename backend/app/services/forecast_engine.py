@@ -861,18 +861,24 @@ def prepare_lstm_features(
     last_date: str,
 ) -> dict:
     """
-    Prepare scaled feature window for client-side Attention-LSTM inference.
+    Prepare scale-invariant feature window for client-side Attention-LSTM inference.
 
-    Computes [return, vol_21d, mom_5d, mom_21d, rsi_14] features from the
-    portfolio's return series, fits a per-portfolio MinMaxScaler, and returns:
-      - last_window: the final LOOKBACK rows of scaled features (60 × 5)
-      - scaler_min / scaler_max: per-feature bounds for client-side inverse transform
-      - forecast_dates: pre-computed business-day forecast dates
+    Features (all bounded in ~[-1, 1] by construction — NO per-portfolio scaler):
+      [0] z_ret       = r_t / σ_21d(r_{t-21..t-1}), clipped to ±3, divided by 3
+      [1] vol_pct     = percentile of σ_63d in its 5y trailing window, mapped to [-1, 1]
+      [2] z_mom5      = sum_5(r) / (σ_5 * √5),   clipped to ±3, divided by 3
+      [3] z_mom21    = sum_21(r) / (σ_21 * √21), clipped to ±3, divided by 3
+      [4] rsi_centred = 2*rsi_14 - 1
 
-    The browser uses these to seed the MC Dropout inference loop in LSTMInferer.js.
+    The browser unscales predictions via:  r_pred = (model_out * 3) * current_sigma_21d
+
+    Contract MUST stay in lockstep with:
+      - backend/scripts/train_lstm.py  (training feature builder)
+      - frontend/src/ml/LSTMInferer.js (client-side rollout)
     """
-    LOOKBACK = 60
-    MIN_OBS  = LOOKBACK + 90
+    LOOKBACK    = 60
+    MIN_OBS     = LOOKBACK + 90
+    CLIP_SIGMAS = 3.0
 
     if len(returns) < MIN_OBS:
         raise ValueError(
@@ -880,36 +886,66 @@ def prepare_lstm_features(
             f"got {len(returns)}. Try a longer backtest date range."
         )
 
-    from sklearn.preprocessing import MinMaxScaler
-
     r  = returns.copy()
     df = pd.DataFrame({"r": r})
-    df["vol_21d"]  = r.rolling(21).std() * np.sqrt(TRADING_DAYS)
-    df["mom_5d"]   = r.rolling(5).sum()
-    df["mom_21d"]  = r.rolling(21).sum()
-    delta          = r.diff()
-    gain           = delta.clip(lower=0).rolling(14).mean()
-    loss           = (-delta.clip(upper=0)).rolling(14).mean()
-    df["rsi_14"]   = gain / (gain + loss + 1e-9)
-    df = df.dropna()
 
-    feat_cols = ["r", "vol_21d", "mom_5d", "mom_21d", "rsi_14"]
-    scaler    = MinMaxScaler(feature_range=(-1, 1))
-    scaled    = scaler.fit_transform(df[feat_cols].values)
+    # Causal rolling std — shifted by 1 so we don't leak r_t into its own denominator
+    sigma_21 = r.rolling(21).std().shift(1)
+    sigma_5  = r.rolling(5).std().shift(1)
+    sigma_63 = r.rolling(63).std().shift(1)
 
-    last_window    = scaled[-LOOKBACK:].tolist()    # (60, 5)
+    # Vol regime: where does today's 63d vol sit in its 5y history, mapped to [-1, 1]
+    vol_pct_raw = sigma_63.rolling(5 * TRADING_DAYS, min_periods=TRADING_DAYS).rank(pct=True)
+    df["vol_pct"] = (2.0 * vol_pct_raw - 1.0).clip(-1, 1)
+
+    df["z_ret"]   = (r / (sigma_21 + 1e-9)).clip(-CLIP_SIGMAS, CLIP_SIGMAS) / CLIP_SIGMAS
+
+    mom5  = r.rolling(5).sum()
+    mom21 = r.rolling(21).sum()
+    df["z_mom5"]  = (mom5  / (sigma_5  * np.sqrt(5)  + 1e-9)).clip(-CLIP_SIGMAS, CLIP_SIGMAS) / CLIP_SIGMAS
+    df["z_mom21"] = (mom21 / (sigma_21 * np.sqrt(21) + 1e-9)).clip(-CLIP_SIGMAS, CLIP_SIGMAS) / CLIP_SIGMAS
+
+    delta = r.diff()
+    gain  = delta.clip(lower=0).rolling(14).mean()
+    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+    rsi14 = gain / (gain + loss + 1e-9)
+    df["rsi_centred"] = (2.0 * rsi14 - 1.0).clip(-1, 1)
+
+    feat_cols = ["z_ret", "vol_pct", "z_mom5", "z_mom21", "rsi_centred"]
+    df = df.dropna(subset=feat_cols)
+
+    if len(df) < LOOKBACK:
+        raise ValueError(
+            f"Insufficient usable history after feature engineering: "
+            f"{len(df)} rows < lookback {LOOKBACK}."
+        )
+
+    last_window    = df[feat_cols].values[-LOOKBACK:].astype(float).tolist()
     forecast_dates = _forecast_dates(last_date, horizon)
 
-    # raw return seed lets the client rebuild all 5 features during rollout
-    raw_return_seed = r.iloc[-64:].tolist()  # 64 ≥ 21 (vol window) + buffer
+    # Client needs the current σ_21d to unscale z-predictions back to raw returns.
+    current_sigma_21d = float(r.iloc[-21:].std())
+    if not np.isfinite(current_sigma_21d) or current_sigma_21d <= 0:
+        current_sigma_21d = 0.015  # ~1.5% fallback
+
+    # Raw return seed: last ~128 returns are enough to rebuild z_ret / z_mom5 /
+    # z_mom21 / RSI during the rollout (all use ≤ 21d windows + small buffers).
+    raw_return_seed = r.iloc[-128:].astype(float).tolist()
+
+    # σ_63 percentile history: the vol_pct feature ranks today's σ_63 within its
+    # trailing 5y distribution. We precompute that distribution on the server so
+    # the client doesn't need to ship 1260 raw returns.
+    sigma_63_series = sigma_63.dropna().iloc[-(5 * TRADING_DAYS):].astype(float)
+    sigma_63_history = sigma_63_series.tolist()
 
     return {
-        "last_window":     last_window,
-        "scaler_min":      scaler.data_min_.tolist(),
-        "scaler_max":      scaler.data_max_.tolist(),
-        "feature_names":   feat_cols,
-        "forecast_dates":  forecast_dates,
-        "raw_return_seed": raw_return_seed,
+        "last_window":        last_window,
+        "feature_names":      feat_cols,
+        "forecast_dates":     forecast_dates,
+        "raw_return_seed":    raw_return_seed,
+        "current_sigma_21d":  current_sigma_21d,
+        "sigma_63_history":   sigma_63_history,
+        "clip_sigmas":        CLIP_SIGMAS,
     }
 
 
