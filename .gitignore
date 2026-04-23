@@ -41,3 +41,7 @@ npm-debug.log*
 
 # yfinance cache
 .yfinance_cache/
+
+# Local scratch directories (Claude diagnostic / fix drops)
+Opus Fix_*/
+Opus FIx_*/
