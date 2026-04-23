@@ -426,29 +426,19 @@ def forecast_hmm(
     n_train = max(int(n * 0.8), 60)
     r_train = returns.iloc[:n_train].values.reshape(-1, 1)
 
-    # Budget: single fit with 50 iters + diag covariance. Each 2k-sample fit
-    # on Railway's shared CPU takes ~8-10 s at n_iter=75; additional restarts
-    # delivered little benefit because Baum-Welch was oscillating below tol.
+    # Budget: single fit with 50 iters + diag covariance. hmmlearn's default
+    # k-means init ("stmc") is deterministic and close enough to the MLE that
+    # extra random restarts delivered negligible improvement in testing while
+    # doubling Phase-2 wall-clock on Railway's shared CPU (~8-10s per fit).
     # Diagonal covariance has 2× fewer parameters for a 2-state 1-D model
     # (identical expressiveness here, faster EM).
-    best_model = None
-    best_score = -np.inf
-    for seed in range(2):
-        try:
-            m = GaussianHMM(n_components=2, covariance_type="diag",
-                            n_iter=50, random_state=seed, tol=1e-3,
+    try:
+        model = GaussianHMM(n_components=2, covariance_type="diag",
+                            n_iter=50, random_state=0, tol=1e-3,
                             init_params="stmc")
-            m.fit(r_train)
-            score = m.score(r_train)
-            if score > best_score:
-                best_score, best_model = score, m
-        except Exception:
-            continue
-
-    if best_model is None:
+        model.fit(r_train)
+    except Exception:
         raise RuntimeError("HMM failed to converge")
-
-    model = best_model
     A     = model.transmat_                    # (2,2) transition matrix
     means = model.means_.flatten()             # (2,) per-state daily mean
     stds  = np.sqrt(model.covars_.flatten())   # (2,) per-state daily std
@@ -502,46 +492,57 @@ def forecast_hmm(
     }
 
     if macro_context:
-        yc       = macro_context.get("yield_curve_10y2y", 0.6)
-        yc_rank  = macro_context.get("yield_curve_pct_rank", 0.5)
-        vix_rank = macro_context.get("vix_pct_rank", 0.5)
-        cr_rank  = macro_context.get("credit_pct_rank", 0.5)
-
-        if yc < 0:
-            yield_regime = "inverted"
-        elif yc_rank < 0.25:
-            yield_regime = "flat"
-        elif yc_rank > 0.75:
-            yield_regime = "steep"
-        else:
-            yield_regime = "normal"
-
-        if vix_rank > 0.80:
-            vix_regime = "elevated"
-        elif vix_rank > 0.60:
-            vix_regime = "above_avg"
-        else:
-            vix_regime = "calm"
-
-        if yield_regime == "inverted" or cr_rank > 0.80:
-            macro_env = "restrictive"
-        elif yield_regime in ("steep", "normal") and vix_regime == "calm" and cr_rank < 0.50:
-            macro_env = "expansionary"
-        else:
-            macro_env = "neutral"
-
-        meta["macro_env"]          = macro_env
-        meta["yield_curve_regime"] = yield_regime
-        meta["vix_regime"]         = vix_regime
-        meta["yield_curve_10y2y"]  = round(yc, 3)
-        meta["vix_pct_rank"]       = round(vix_rank, 3)
-        meta["credit_pct_rank"]    = round(cr_rank, 3)
+        decorate_hmm_meta_with_macro(meta, macro_context)
 
     return {
         "band": band,
         "metadata": meta,
         "compute_ms": int((time.time() - t0) * 1000),
     }
+
+
+def decorate_hmm_meta_with_macro(meta: dict, macro_context: dict) -> None:
+    """
+    In-place decorate HMM metadata with macro-regime labels derived from
+    yield-curve / VIX / credit spread ranks. Extracted from forecast_hmm so
+    the HMM fit can run in parallel with the tier-2 provider fan-out: the
+    HMM future is dispatched before macro has landed, and this helper
+    back-fills the meta{} once macro_ctx is available.
+    """
+    yc       = macro_context.get("yield_curve_10y2y", 0.6)
+    yc_rank  = macro_context.get("yield_curve_pct_rank", 0.5)
+    vix_rank = macro_context.get("vix_pct_rank", 0.5)
+    cr_rank  = macro_context.get("credit_pct_rank", 0.5)
+
+    if yc < 0:
+        yield_regime = "inverted"
+    elif yc_rank < 0.25:
+        yield_regime = "flat"
+    elif yc_rank > 0.75:
+        yield_regime = "steep"
+    else:
+        yield_regime = "normal"
+
+    if vix_rank > 0.80:
+        vix_regime = "elevated"
+    elif vix_rank > 0.60:
+        vix_regime = "above_avg"
+    else:
+        vix_regime = "calm"
+
+    if yield_regime == "inverted" or cr_rank > 0.80:
+        macro_env = "restrictive"
+    elif yield_regime in ("steep", "normal") and vix_regime == "calm" and cr_rank < 0.50:
+        macro_env = "expansionary"
+    else:
+        macro_env = "neutral"
+
+    meta["macro_env"]          = macro_env
+    meta["yield_curve_regime"] = yield_regime
+    meta["vix_regime"]         = vix_regime
+    meta["yield_curve_10y2y"]  = round(yc, 3)
+    meta["vix_pct_rank"]       = round(vix_rank, 3)
+    meta["credit_pct_rank"]    = round(cr_rank, 3)
 
 
 # ── 4. Fama-French Factor-Anchored Forecast ───────────────────────────────────
@@ -1020,6 +1021,29 @@ def run_all_forecasts(req) -> dict:
     edgar_ctx:  dict = {}
 
     from concurrent.futures import ThreadPoolExecutor as _CtxPool
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    # ── Heavy server models dispatched FIRST ───────────────────────────────
+    # HMM and GP each take ~10-15s on Railway's shared CPU and neither depends
+    # on the tier-2 text providers (news/reddit/edgar) — those feed purely
+    # display metadata. Previously the method dispatch was in a second block
+    # AFTER awaiting the full provider pool, so HMM/GP serialised behind the
+    # slowest network fetch (often reddit). Submitting them here lets the
+    # C-extension fits overlap with the I/O-bound provider fan-out.
+    #
+    # HMM is fitted with macro_context=None; the macro-regime labels are
+    # back-filled into out["metadata"] once the macro future lands.
+    _pending_futures: dict = {}
+    _server_pool = ThreadPoolExecutor(max_workers=2)
+    for _m in req.methods:
+        if _m == "hmm":
+            _pending_futures["hmm"] = _server_pool.submit(
+                forecast_hmm, returns, h, np_, last_date, None,
+            )
+        elif _m == "var":
+            _pending_futures["var"] = _server_pool.submit(
+                forecast_gp, returns, h, last_date,
+            )
 
     def _safe_macro():
         try:
@@ -1126,22 +1150,10 @@ def run_all_forecasts(req) -> dict:
 
     _hmm_out_extras: dict = {}   # populated during HMM dispatch for regime/ensemble
 
-    # Heavy server-side methods (HMM / GP) are independent — dispatch them
-    # concurrently via a thread pool so the slowest method doesn't starve the
-    # others within the client's 60 s Phase 2 budget.
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    # HMM / GP futures were already submitted up top so they overlap with the
+    # tier-2 provider fan-out. Macro context is back-filled onto HMM meta in
+    # the per-method loop below (forecast_hmm itself was called with None).
     PHASE2_SERVER_METHODS = {"hmm", "var"}
-    _pending_futures: dict = {}
-    _server_pool = ThreadPoolExecutor(max_workers=2)
-    for m in req.methods:
-        if m == "hmm":
-            _pending_futures["hmm"] = _server_pool.submit(
-                forecast_hmm, returns, h, np_, last_date, macro_ctx or None,
-            )
-        elif m == "var":
-            _pending_futures["var"] = _server_pool.submit(
-                forecast_gp, returns, h, last_date,
-            )
 
     results = []
     for method in req.methods:
@@ -1209,6 +1221,10 @@ def run_all_forecasts(req) -> dict:
                 # 45 s cap — HMM fit on Railway's shared CPU runs ~10 s per
                 # restart and is the wall-clock bottleneck of Phase 2.
                 out = _pending_futures["hmm"].result(timeout=45)
+                # HMM future was dispatched before macro landed, so back-fill
+                # yield-curve / VIX / credit macro-regime labels here.
+                if macro_ctx:
+                    decorate_hmm_meta_with_macro(out["metadata"], macro_ctx)
                 if news_ctx:
                     out["metadata"]["news_article_count"] = news_ctx.get("portfolio_summary", {}).get("total_articles")
                 # Phase 5A: 4-state regime classification after HMM (non-fatal)

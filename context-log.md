@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-04-24 — Phase 2 latency: overlap HMM/GP with tier-2 providers + drop HMM restart
+
+User screenshot showed Phase 2 ETA bar at **+92s — still running**, triggering the Cloudflare 502. Traced two concrete serialisations in [forecast_engine.py](backend/app/services/forecast_engine.py::run_all_forecasts):
+
+### A. Tier-2 providers serialised HMM/GP
+
+The server-side thread pool for HMM + GP was submitted *after* the provider `_CtxPool` block awaited `news / reddit / edgar`. Those providers take 15-25 s on cold cache — HMM and GP don't depend on them (they consume only `returns`), so wall-clock was roughly:
+
+```
+before:  providers (20s) → HMM/GP (20s)            = ~40s
+after:   max(providers (20s), HMM/GP (20s))        = ~20s
+```
+
+Hoisted the `_server_pool = ThreadPoolExecutor(max_workers=2)` submission to fire *before* the provider fan-out. HMM is now dispatched with `macro_context=None`; the macro-regime decorations (`macro_env`, `yield_curve_regime`, `vix_regime`, etc.) are back-filled after the HMM future resolves via a new `decorate_hmm_meta_with_macro()` helper extracted from [forecast_engine.py::forecast_hmm](backend/app/services/forecast_engine.py#L537).
+
+### B. HMM redundant seed restart
+
+[forecast_hmm](backend/app/services/forecast_engine.py#L380) ran `for seed in range(2)` taking the higher-scoring fit. The pre-existing in-code comment already admitted *"additional restarts delivered little benefit because Baum-Welch was oscillating below tol."* Dropped to a single fit with `random_state=0 + init_params="stmc"` (hmmlearn's deterministic k-means init). Saves ~8-10 s.
+
+### Expected new Phase 2 wall-clock
+
+- Before: provider fan-out (20 s) → HMM 2-seed (~18 s) ∥ GP (~12 s) ≈ **~40 s warm** / 70-100 s cold
+- After: max(provider fan-out (20 s), HMM 1-seed (~10 s) ∥ GP (~12 s)) ≈ **~20 s warm** / 40-60 s cold
+
+Puts Phase 2 back inside the ~100 s Cloudflare upstream ceiling on cold boots and removes the need for the 502 auto-retry to kick in most of the time (kept the retry as a safety net).
+
+Files: `backend/app/services/forecast_engine.py`.
+
+---
+
 ## 2026-04-24 — Phase 2 502 retry, silence ONNX meta probe, version badge
 
 Three follow-ups after screenshot from user showing `/api/forecast 502`, `/models/meta/bull_low_vol.onnx 404`, and a request to surface the live commit on the page.
@@ -19,7 +49,6 @@ Root cause of the 502: Railway's free-tier edge proxy enforces a ~100 s upstream
 Added `__GIT_SHA__` + `__GIT_DATE__` to Vite's `define` block — captured at build time via `git rev-parse --short HEAD` (falls back to `VERCEL_GIT_COMMIT_SHA` env var on Vercel). Rendered in the header as a clickable badge (`v·<sha>·<date>`) linking to the GitHub commit. The user can now see at a glance which commit Vercel is serving without opening devtools.
 
 ### Note on the "Method Not Allowed" detail
-
 When the user clicked the `/api/forecast` link in devtools, the response was `{"detail":"Method Not Allowed"}`. That's expected — the endpoint is POST-only, a bare GET from the browser URL bar returns 405. Not a bug.
 
 Files: `frontend/src/hooks/useForecast.js`, `frontend/src/ml/MetaEnsemble.js`, `frontend/src/components/Layout/App.jsx`, `frontend/vite.config.js`.
