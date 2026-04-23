@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-04-23 — Ticker feed: English-only headlines + faster refresh
+
+Two tweaks to the top-of-app scrolling ticker ([backend/app/routers/ticker.py](backend/app/routers/ticker.py)):
+
+1. **English-only news filter.** GDELT's `&sourcelang=english` occasionally leaks foreign-language titles through. Added a client-side guard in `_build_news_items` requiring ≥80% ASCII characters per headline. Cheap — no extra upstream calls.
+2. **Feed cache TTL: 300s → 60s.** Prices now update ~5× faster in the marquee. No upstream load amplification: GDELT has a 12h upstream cache inside `news_provider.py` and Reddit trending has a 15m upstream cache — sub-60s polling deduplicates there for free. Price fetches go through the 24h SQLite L2 cache (`fetch_prices`), so they're effectively free too.
+
+Also confirmed (not a code change, just documenting the audit): Reddit/WSB data is used **only in the ticker + displayed as XGBoost method-card metadata** ([ForecastMethodCard.jsx:234-236](frontend/src/components/Dashboard/ForecastMethodCard.jsx#L234-L236)). No forecast model consumes `mention_count_7d` or `avg_score_7d` as a feature. `tier2_context.reddit` is purely informational for the architecture diagram.
+
+Files: `backend/app/routers/ticker.py`.
+
+---
+
 ## 2026-04-23 — LSTM training pipeline: quant best-practice audit + fixes
 
 Audited `train_lstm.py` after the first real training run produced a misleading "OOS MSE 0.121" gate failure. Several quant-hygiene issues surfaced:

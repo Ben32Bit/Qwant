@@ -37,8 +37,22 @@ _TICKER_LIST = [
 
 _NEWS_QUERY = "stock market Wall Street Nasdaq Dow Jones earnings"
 
-_CACHE_TTL_S = 300   # 5 minutes
+# 60s is the sweet spot: prices (SQLite-cached) refresh cheaply; GDELT (12h
+# upstream cache) and Reddit trending (15m upstream cache) deduplicate deeper
+# hits for free, so faster polling here doesn't amplify upstream load.
+_CACHE_TTL_S = 60
 _cache: dict[str, tuple[float, dict]] = {}
+
+# Non-Latin headlines occasionally slip past GDELT's `sourcelang=english`
+# filter. Require ≥80% ASCII characters as a belt-and-suspenders check.
+_MIN_ASCII_RATIO = 0.80
+
+
+def _is_english(text: str) -> bool:
+    if not text:
+        return False
+    ascii_chars = sum(1 for c in text if ord(c) < 128)
+    return ascii_chars / len(text) >= _MIN_ASCII_RATIO
 
 
 @router.get("/ticker/feed")
@@ -142,7 +156,7 @@ def _build_news_items() -> list[dict]:
     seen: set[str] = set()
     for h in headlines:
         clean = (h or "").strip()
-        if not clean or clean in seen:
+        if not clean or clean in seen or not _is_english(clean):
             continue
         seen.add(clean)
         out.append({"kind": "news", "headline": clean[:200]})
