@@ -46,14 +46,15 @@ An AI-powered portfolio construction, backtesting, and forecasting platform. Des
 - **Factor model (FF5)** — Fama-French 5-factor decomposition
 - **HMM** — Hamilton (1989) regime detection over 4 regimes (bull/low-vol, bull/high-vol, bear, crisis)
 - **Gaussian Process / VAR** — Sims (1980), Ledoit-Wolf shrinkage covariance
-- **Attention-LSTM** — 200-pass MC dropout, browser TF.js inference
+- **Attention-LSTM** — Bahdanau-attention LSTM with MC Dropout uncertainty, trained weekly on 55 assets using scale-invariant volatility-normalised features and Huber loss, gated on a rolling 12-month held-out test window. Browser TF.js inference.
 - **Regime-conditional ensemble** — Ang & Timmermann (2012) priors, disagreement-adjusted confidence bands
 - **Kelly sizing** + **scenario stress tester** (soft landing, rate spike, mild recession, severe crisis, stagflation)
 - **FinBERT sentiment** on SEC filings + GDELT headlines
 
 **Live market context**
-- Rolling ticker marquee: real-time prices (SPY/QQQ/major tech/commodities/crypto), GDELT headlines, Reddit trending from r/wallstreetbets, r/investing, r/stocks
-- Refreshes every 5 minutes; pauses when the tab is backgrounded
+- Rolling ticker marquee: real-time prices (SPY/QQQ/major tech/commodities/crypto), English-filtered GDELT headlines, Reddit trending from r/wallstreetbets, r/investing, r/stocks
+- Refreshes every 60 seconds; pauses when the tab is backgrounded
+- Reddit/WSB data is displayed on the ticker and as an XGBoost metadata pill — it is **not** used as a predictor feature in any forecast model
 
 ---
 
@@ -97,6 +98,8 @@ An AI-powered portfolio construction, backtesting, and forecasting platform. Des
 ```
 
 The platform is deliberately **thin-server, thick-client** for ML: XGBoost and N-BEATS ONNX weights plus the Attention-LSTM TF.js model all run in the browser. That keeps Railway's free tier well under 512MB RAM (the tf-cpu Python package alone would add ~450MB) and means forecast latency scales with user CPU, not server load.
+
+The LSTM is **retrained weekly** via GitHub Actions (`.github/workflows/retrain-lstm.yml`, Sunday 06:00 UTC) on an isolated `ubuntu-latest` runner. The job pulls fresh price data for the 55-asset universe, trains with Huber loss + scale-invariant features, and commits the new `.keras` + TF.js artefacts only if the validation gate passes (MSE / var(y_test) ≤ 1.10 on a rolling 12-month held-out window). Keeps production weights fresh without touching the API container.
 
 ---
 
@@ -390,4 +393,6 @@ Research references baked into the forecasting engine:
 - Fama, E.F. & French, K.R. (2015). *A five-factor asset pricing model.* J. Financ. Econ.
 - Ledoit, O. & Wolf, M. (2004). *Honey, I Shrunk the Sample Covariance Matrix.* J. Portf. Manag.
 - Oreshkin, B.N. et al. (2020). *N-BEATS: Neural basis expansion analysis for interpretable time series forecasting.* ICLR.
+- Bahdanau, D., Cho, K. & Bengio, Y. (2015). *Neural Machine Translation by Jointly Learning to Align and Translate.* ICLR. *(LSTM attention layer)*
+- Gal, Y. & Ghahramani, Z. (2016). *Dropout as a Bayesian Approximation: Representing Model Uncertainty in Deep Learning.* ICML. *(LSTM MC Dropout)*
 - Lopez de Prado, M. (2018). *Advances in Financial Machine Learning.* Wiley.
