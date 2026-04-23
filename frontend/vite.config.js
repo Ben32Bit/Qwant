@@ -1,8 +1,28 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { execSync } from 'node:child_process'
+
+// Capture git SHA + commit date at build time so the deployed bundle can
+// display which commit is live. Wrapped in try/catch because Vercel's build
+// env includes git, but a `npm pack` / docker-less environment may not.
+function gitInfo() {
+  try {
+    const sha   = (process.env.VERCEL_GIT_COMMIT_SHA || execSync('git rev-parse --short HEAD').toString()).trim().slice(0, 7)
+    const date  = execSync('git log -1 --format=%cd --date=short').toString().trim()
+    return { sha, date }
+  } catch {
+    return { sha: 'dev', date: new Date().toISOString().slice(0, 10) }
+  }
+}
+
+const { sha: GIT_SHA, date: GIT_DATE } = gitInfo()
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __GIT_SHA__:  JSON.stringify(GIT_SHA),
+    __GIT_DATE__: JSON.stringify(GIT_DATE),
+  },
   optimizeDeps: {
     exclude: ['@xenova/transformers', 'onnxruntime-web'],
   },

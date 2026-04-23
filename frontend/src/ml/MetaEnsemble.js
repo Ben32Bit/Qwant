@@ -32,11 +32,18 @@ const REGIME_WEIGHTS = {
 // ── ONNX model cache ──────────────────────────────────────────────────────────
 const _onnxCache = {}
 
+// Per-regime meta ONNX models aren't built yet. The HEAD probe below used to
+// fire on every forecast run (one per regime), spraying red 404s in devtools
+// even though the fallback rule-based path handled it silently. Flip this
+// flag when an actual training pipeline ships models to /models/meta/.
+const META_ONNX_AVAILABLE = false
+
 /**
  * Try to load a per-regime ONNX model. Returns null if unavailable.
  * Models are expected at /models/meta/{regime}.onnx (Vercel static asset).
  */
 async function tryLoadOnnxModel(regime) {
+  if (!META_ONNX_AVAILABLE) return null
   if (_onnxCache[regime] !== undefined) return _onnxCache[regime]
   try {
     if (typeof window === 'undefined' || !window.ort) { _onnxCache[regime] = null; return null }

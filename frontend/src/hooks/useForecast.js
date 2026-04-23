@@ -196,15 +196,17 @@ export function useForecast(backtest, portfolio) {
     }
 
     // ── Phase 2: server ────────────────────────────────────────────────────
+    // Railway free-tier + Cloudflare edge impose a ~100s upstream timeout. On
+    // a cold boot HMM+GP can exceed that and the edge returns 502 before the
+    // container has even finished computing. One silent retry on 502/504
+    // almost always succeeds because the container is now warm from attempt 1.
     p2Start.current = Date.now()
     setLoading(l => ({ ...l, phase2: true }))
     let p2Data = null
     let p2FailReason = null
-    try {
+
+    const runPhase2 = async () => {
       const p2Controller = new AbortController()
-      // 180s: Railway free-tier cold boot (30-60s) + HMM/GP compute + tier-2
-      // providers can push Phase 2 past 90s on a first run; a premature abort
-      // drops data that's still in flight and forces the user to rerun.
       const p2Timeout    = setTimeout(() => p2Controller.abort(), 180_000)
       try {
         const res = await fetch('/api/forecast', {
@@ -213,17 +215,34 @@ export function useForecast(backtest, portfolio) {
           body: JSON.stringify({ ...body, methods: PHASE2_METHODS }),
           signal: p2Controller.signal,
         })
-        if (!res.ok) throw new Error(`Forecast phase 2 failed: ${res.status}`)
-        p2Data = await res.json()
-        setPhase2(p2Data)
-        // Tier-2 context providers are skipped in Phase 1 to hit the ~1-2s
-        // latency budget; they're fetched in Phase 2 and propagated here.
-        if (p2Data?.news_context)  setNewsContext(p2Data.news_context)
-        if (p2Data?.edgar_context) setEdgarContext(p2Data.edgar_context)
-        setTiming(t => ({ ...t, phase2Ms: Date.now() - (p2Start.current ?? Date.now()) }))
+        if (!res.ok) {
+          const err = new Error(`Forecast phase 2 failed: ${res.status}`)
+          err.status = res.status
+          throw err
+        }
+        return await res.json()
       } finally {
         clearTimeout(p2Timeout)
       }
+    }
+
+    try {
+      try {
+        p2Data = await runPhase2()
+      } catch (e) {
+        // Retry once on edge-proxy failure (502/504) — container is warm now.
+        if (e.status === 502 || e.status === 504) {
+          console.warn(`Phase 2 got ${e.status}, retrying once…`)
+          await new Promise(r => setTimeout(r, 1500))
+          p2Data = await runPhase2()
+        } else {
+          throw e
+        }
+      }
+      setPhase2(p2Data)
+      if (p2Data?.news_context)  setNewsContext(p2Data.news_context)
+      if (p2Data?.edgar_context) setEdgarContext(p2Data.edgar_context)
+      setTiming(t => ({ ...t, phase2Ms: Date.now() - (p2Start.current ?? Date.now()) }))
     } catch (e) {
       p2FailReason = e.name === 'AbortError'
         ? 'Phase 2 timed out after 180s'

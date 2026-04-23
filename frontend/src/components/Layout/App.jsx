@@ -30,6 +30,22 @@ export default function App() {
         </div>
         <div className="flex items-center gap-4 text-xs mono" style={{ color: 'var(--text-secondary)' }}>
           <span>Free · No signup · Real market data</span>
+          <a
+            href={`https://github.com/Ben32Bit/Qwant/commit/${__GIT_SHA__}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Deployed commit ${__GIT_SHA__} (${__GIT_DATE__})`}
+            style={{
+              padding: '2px 8px',
+              borderRadius: 4,
+              border: '1px solid var(--border)',
+              color: 'var(--text-secondary)',
+              textDecoration: 'none',
+              background: 'var(--bg-card)',
+            }}
+          >
+            v·{__GIT_SHA__}·{__GIT_DATE__}
+          </a>
         </div>
       </header>
 

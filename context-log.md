@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-04-24 — Phase 2 502 retry, silence ONNX meta probe, version badge
+
+Three follow-ups after screenshot from user showing `/api/forecast 502`, `/models/meta/bull_low_vol.onnx 404`, and a request to surface the live commit on the page.
+
+### 1. Auto-retry Phase 2 on 502/504 ([useForecast.js:198-251](frontend/src/hooks/useForecast.js#L198))
+
+Root cause of the 502: Railway's free-tier edge proxy enforces a ~100 s upstream timeout. On a genuine cold boot (30-60 s imports + HMM/GP + tier-2 providers) Phase 2 exceeds that and the edge returns `502 Bad Gateway` before the container has finished. Subsequent requests succeed because the container is warm. Refactored Phase 2 into a `runPhase2()` closure and added a silent retry-once-after-1.5 s on `status === 502 || 504`. From the user's POV the first forecast just takes longer and then works, instead of failing and requiring a manual rerun.
+
+### 2. Silence meta ONNX 404 probe ([MetaEnsemble.js:32-56](frontend/src/ml/MetaEnsemble.js#L32))
+
+`computeEnsemble` fires a HEAD probe to `/models/meta/{regime}.onnx` every run. Per-regime meta ONNX models were never built, so this 404s four times per forecast, spraying red errors in devtools even though the rule-based fallback silently handled it. Added a module-level `META_ONNX_AVAILABLE = false` gate that short-circuits the probe until we actually ship trained meta models. Zero behavioural change — the rule-based `blendWeights` path was already the one being used.
+
+### 3. Version badge in header ([App.jsx](frontend/src/components/Layout/App.jsx), [vite.config.js](frontend/vite.config.js))
+
+Added `__GIT_SHA__` + `__GIT_DATE__` to Vite's `define` block — captured at build time via `git rev-parse --short HEAD` (falls back to `VERCEL_GIT_COMMIT_SHA` env var on Vercel). Rendered in the header as a clickable badge (`v·<sha>·<date>`) linking to the GitHub commit. The user can now see at a glance which commit Vercel is serving without opening devtools.
+
+### Note on the "Method Not Allowed" detail
+
+When the user clicked the `/api/forecast` link in devtools, the response was `{"detail":"Method Not Allowed"}`. That's expected — the endpoint is POST-only, a bare GET from the browser URL bar returns 405. Not a bug.
+
+Files: `frontend/src/hooks/useForecast.js`, `frontend/src/ml/MetaEnsemble.js`, `frontend/src/components/Layout/App.jsx`, `frontend/vite.config.js`.
+
+---
+
 ## 2026-04-24 — Forecast Phase 2 first-run rendering fix (hoist hook + 180s timeout)
 
 Symptom: first forecast run looked stuck — Phase 2 "loaded but somehow not reflecting the results and timing out." Switching AI Assistant → Forecast and clicking **Rerun** made results appear instantly, proving the data was computed but never rendered on the first pass.
