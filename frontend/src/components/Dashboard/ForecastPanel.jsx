@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import { useForecast } from '../../hooks/useForecast.js'
 import ForecastComposite from './ForecastComposite.jsx'
 import ForecastSnapshotCards from './ForecastSnapshotCards.jsx'
 import ForecastMethodCard from './ForecastMethodCard.jsx'
@@ -151,9 +150,10 @@ function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, 
 
 // ── Main panel ────────────────────────────────────────────────────────────────
 
-export default function ForecastPanel({ backtest, portfolio }) {
-  const { results, meta, loading, error, run, hasData, newsContext, edgarContext, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef } =
-    useForecast(backtest, portfolio)
+export default function ForecastPanel({ backtest, portfolio, forecast }) {
+  // `forecast` is hoisted to SplitView so in-flight Phase 1/2 state survives
+  // a Results⇄Forecast tab switch (the panel itself unmounts on switch).
+  const { results, meta, loading, error, run, hasData, newsContext, edgarContext, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef } = forecast
 
   const [ensemble, setEnsemble] = useState(null)
 

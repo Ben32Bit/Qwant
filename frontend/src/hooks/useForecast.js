@@ -202,7 +202,10 @@ export function useForecast(backtest, portfolio) {
     let p2FailReason = null
     try {
       const p2Controller = new AbortController()
-      const p2Timeout    = setTimeout(() => p2Controller.abort(), 90_000)
+      // 180s: Railway free-tier cold boot (30-60s) + HMM/GP compute + tier-2
+      // providers can push Phase 2 past 90s on a first run; a premature abort
+      // drops data that's still in flight and forces the user to rerun.
+      const p2Timeout    = setTimeout(() => p2Controller.abort(), 180_000)
       try {
         const res = await fetch('/api/forecast', {
           method: 'POST',
@@ -223,7 +226,7 @@ export function useForecast(backtest, portfolio) {
       }
     } catch (e) {
       p2FailReason = e.name === 'AbortError'
-        ? 'Phase 2 timed out after 90s'
+        ? 'Phase 2 timed out after 180s'
         : `Phase 2 error: ${e.message}`
       console.warn(p2FailReason)
     } finally {

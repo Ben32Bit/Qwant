@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-04-24 — Forecast Phase 2 first-run rendering fix (hoist hook + 180s timeout)
+
+Symptom: first forecast run looked stuck — Phase 2 "loaded but somehow not reflecting the results and timing out." Switching AI Assistant → Forecast and clicking **Rerun** made results appear instantly, proving the data was computed but never rendered on the first pass.
+
+### Root causes
+
+1. **ForecastPanel unmounts on tab switch.** [SplitView.jsx](frontend/src/components/Layout/SplitView.jsx) conditionally renders `{rightTab === 'forecast' && <ForecastPanel .../>}` — switching to Results destroys the component, killing `useForecast`'s state, AbortController, and any in-flight fetch. The Phase 2 network roundtrip that was still running never got its `setState` call home.
+2. **Phase 2 90s AbortController timeout** ([useForecast.js:205](frontend/src/hooks/useForecast.js#L205)) fired before cold-boot + HMM/GP + tier-2 providers completed on a fresh Railway container (30-60 s cold boot alone).
+
+### Changes
+
+1. **Hoisted `useForecast` from [ForecastPanel.jsx](frontend/src/components/Dashboard/ForecastPanel.jsx) up to [SplitView.jsx](frontend/src/components/Layout/SplitView.jsx).** Hook now lives at the always-mounted parent; forecast state (`results`, `meta`, `loading`, timing refs) survives Results⇄Forecast tab switches. Passed to `ForecastPanel` as a single `forecast={forecast}` prop so the panel destructures without calling the hook itself.
+2. **Bumped Phase 2 fetch timeout 90s → 180s.** Cold boot + HMM + GP + tier-2 can legitimately exceed 90s on Railway free tier. Premature abort was shredding valid results. Error message updated accordingly.
+
+Net effect: the first forecast click now paints Phase 2 results as soon as the server responds, regardless of which right-tab the user is looking at while it's in flight. No user-observable behaviour change on warm-cache / fast-path runs.
+
+Files: `frontend/src/components/Layout/SplitView.jsx`, `frontend/src/components/Dashboard/ForecastPanel.jsx`, `frontend/src/hooks/useForecast.js`.
+
+---
+
 ## 2026-04-24 — Forecast latency part 2: warm-up + speculative prewarm + drop pytrends
 
 Even with parallelised tier-1/2 providers, cold forecast latency was still painful. Three more offenders identified:

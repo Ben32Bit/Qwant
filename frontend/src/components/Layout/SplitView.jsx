@@ -5,6 +5,7 @@ import ResultsPanel from '../Dashboard/ResultsPanel.jsx'
 import ScreenerResults from '../Dashboard/ScreenerResults.jsx'
 import DrawdownChart from '../Dashboard/DrawdownChart.jsx'
 import MetricsCards from '../Dashboard/MetricsCards.jsx'
+import { useForecast } from '../../hooks/useForecast.js'
 
 // Heavy panels / charts only mounted for specific views. Lazy-load so the
 // initial JS bundle stays lean: ForecastPanel pulls in 6 method cards +
@@ -276,6 +277,12 @@ export default function SplitView() {
   const isScreenerView  = !!(screenResult || rotationLoading)
   const isPortfolioView = !isScreenerView && !!(activeBacktest || activeLoading)
 
+  // Hoisted so Phase 1/2 state + in-flight fetches survive Results⇄Forecast tab
+  // switches. If useForecast lived inside ForecastPanel, unmounting the panel
+  // (tab switch) would destroy the AbortController and any pending results,
+  // forcing the user to rerun to see what had actually already loaded.
+  const forecast = useForecast(activeBacktest, activePortfolio)
+
   return (
     <div className="flex h-full">
 
@@ -378,6 +385,7 @@ export default function SplitView() {
                 <ForecastPanel
                   backtest={activeBacktest}
                   portfolio={activePortfolio}
+                  forecast={forecast}
                 />
               </Suspense>
             )}
