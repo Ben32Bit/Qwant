@@ -998,15 +998,15 @@ def run_all_forecasts(req) -> dict:
 
     # ── Data providers dispatched in parallel ───────────────────────────────────
     #
-    # Previously these six providers (macro, insider, news, reddit, trends, edgar)
-    # ran serially before any method dispatch, turning a cold-cache 5-ticker
-    # request into 30-50s of sequential network I/O. They're all independent and
+    # Previously these five providers (macro, insider, news, reddit, edgar) ran
+    # serially before any method dispatch, turning a cold-cache 5-ticker request
+    # into 30-50s of sequential network I/O. They're all independent and
     # I/O-bound, so a single ThreadPoolExecutor fans them out for a ~5-10× win.
     #
     # Phase 1 methods (xgboost / nbeats / factor) only use `returns` in the
-    # model math — tier-2 text providers (news / reddit / trends / edgar) are
-    # purely display metadata for those methods and are skipped to keep Phase 1
-    # at its advertised ~1-2s budget. They still run in Phase 2 where HMM / VAR
+    # model math — tier-2 text providers (news / reddit / edgar) are purely
+    # display metadata for those methods and are skipped to keep Phase 1 at
+    # its advertised ~1-2s budget. They still run in Phase 2 where HMM / VAR
     # / LSTM return the tier-2 context to the frontend for display.
     tickers = [a.ticker for a in req.assets] if req.assets else []
     weights = {a.ticker: a.weight for a in req.assets} if req.assets else {}
