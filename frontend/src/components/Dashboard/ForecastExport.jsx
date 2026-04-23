@@ -243,28 +243,63 @@ export default function ForecastExport({ portfolio, backtest, results, ensemble,
     }
     setBusy('png')
     setOpen(false)
+
+    // html2canvas historically misaligned Recharts SVG under nested flex +
+    // scrollable ancestors — axis labels drifted up into section headers and
+    // research-citation <p> tags clipped into the next card. html-to-image
+    // clones the DOM with computed styles into a single <foreignObject>,
+    // which preserves SVG positioning and flex-gap geometry faithfully.
+    const node = targetRef.current
+
+    // Temporarily un-constrain the scrollable ancestor chain so the export
+    // captures at natural height. Without this, a parent with `h-full +
+    // overflow-y-auto` causes the cloned tree to be measured at viewport
+    // height, which is what triggers the overlap on long forecasts.
+    const mutatedAncestors = []
+    for (let el = node.parentElement; el && el !== document.body; el = el.parentElement) {
+      const cs = getComputedStyle(el)
+      if (cs.overflow !== 'visible' || cs.overflowY !== 'visible' || cs.maxHeight !== 'none') {
+        mutatedAncestors.push({
+          el,
+          overflow:  el.style.overflow,
+          overflowY: el.style.overflowY,
+          maxHeight: el.style.maxHeight,
+          height:    el.style.height,
+        })
+        el.style.overflow  = 'visible'
+        el.style.overflowY = 'visible'
+        el.style.maxHeight = 'none'
+        el.style.height    = 'auto'
+      }
+    }
+
     try {
-      const { default: html2canvas } = await import('html2canvas')
-      const canvas = await html2canvas(targetRef.current, {
+      // One animation frame after the ancestor mutations so Recharts'
+      // ResponsiveContainer re-measures against the natural-height tree.
+      await new Promise(r => requestAnimationFrame(r))
+
+      const { toPng } = await import('html-to-image')
+      const dataUrl = await toPng(node, {
         backgroundColor: '#0a0a0f',
-        scale: 2,
-        useCORS: true,
-        logging: false,
+        pixelRatio:      2,
+        cacheBust:       true,
+        // Give the browser one extra frame after DOM mutations so Recharts'
+        // ResponsiveContainer re-measures before the snapshot.
+        skipFonts:       false,
       })
-      canvas.toBlob(blob => {
-        if (!blob) {
-          setToast('PNG export produced no data')
-          setBusy(null)
-          setTimeout(() => setToast(null), 2500)
-          return
-        }
-        triggerDownload(blob, `${slugForFilename(portfolio)}.png`)
-        setToast('PNG saved')
-        setBusy(null)
-        setTimeout(() => setToast(null), 3500)
-      }, 'image/png')
+      const blob = await (await fetch(dataUrl)).blob()
+      triggerDownload(blob, `${slugForFilename(portfolio)}.png`)
+      setToast('PNG saved')
     } catch (e) {
       setToast(`PNG export failed: ${e?.message ?? e}`)
+    } finally {
+      // Restore ancestor styles even if export throws.
+      for (const r of mutatedAncestors) {
+        r.el.style.overflow  = r.overflow
+        r.el.style.overflowY = r.overflowY
+        r.el.style.maxHeight = r.maxHeight
+        r.el.style.height    = r.height
+      }
       setBusy(null)
       setTimeout(() => setToast(null), 3500)
     }
