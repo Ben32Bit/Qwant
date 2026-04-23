@@ -15,11 +15,14 @@ const METHOD_ORDER = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
 const PHASE2_METHODS    = new Set(['hmm', 'var', 'lstm'])
 const PHASE1_METHODS    = new Set(['xgboost', 'nbeats', 'factor'])
 
-// Typical durations for the ETA bar (milliseconds)
-const PHASE1_EST_MS  = 4_000
+// Typical durations for the ETA bar (milliseconds). These drive the ETA label
+// the user sees under each bar; overshooting the true wall-clock makes the bar
+// sit at 97% and flash "still running" which reads as broken. Calibrate to the
+// cold-boot P90 on Railway's shared CPU so warm runs look "fast" instead.
+const PHASE1_EST_MS  = 8_000    // macro + insider provider fan-out + 3 method preps
 const XGB_EST_MS     = 3_000    // ONNX Runtime Web: ~1-3s (XGBoost)
 const NBEATS_EST_MS  = 5_000    // ONNX Runtime Web: ~3-5s (N-BEATS 12 periods)
-const PHASE2_EST_MS  = 15_000   // HMM + GP
+const PHASE2_EST_MS  = 90_000   // HMM + GP + tier-2 providers, cold-boot P90
 const LSTM_EST_MS    = 5_000    // TF.js browser inference: ~2-5s
 
 // Expandable wrapper for the heavy 12m composite chart. Uses local state so
