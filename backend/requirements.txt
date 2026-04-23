@@ -14,7 +14,6 @@ cachetools==5.5.0
 slowapi==0.1.9
 pandas-datareader==0.10.0
 fredapi>=0.5.1              # FRED API client — uses FRED_API_KEY env var when set
-pytrends>=4.9.2            # Google Trends — unofficial; rate-limit aggressively (24h cache)
 # ── Forecast engine dependencies ──────────────────────────────────────────────
 arch>=6.3.0            # GARCH(1,1) — Engle (1982), Bollerslev (1986)
 hmmlearn>=0.3.2        # Hidden Markov Model — Hamilton (1989)

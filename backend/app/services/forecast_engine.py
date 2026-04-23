@@ -975,30 +975,6 @@ def _portfolio_reddit(reddit_ctx: dict, weights: dict) -> dict | None:
     }
 
 
-def _portfolio_trends(trends_ctx: dict, weights: dict) -> dict | None:
-    """Weighted-average Google Trends z-score across portfolio tickers."""
-    if not trends_ctx:
-        return None
-    total_w = sum(abs(w) for t, w in weights.items() if trends_ctx.get(t, {}).get("available"))
-    if total_w == 0:
-        return None
-    zscore = sum(
-        trends_ctx[t]["zscore_7d"] * abs(w)
-        for t, w in weights.items()
-        if trends_ctx.get(t, {}).get("available")
-    ) / total_w
-    interest = sum(
-        trends_ctx[t]["interest_7d"] * abs(w)
-        for t, w in weights.items()
-        if trends_ctx.get(t, {}).get("available")
-    ) / total_w
-    return {
-        "portfolio_zscore_7d":    round(zscore, 2),
-        "portfolio_interest_7d":  round(interest, 1),
-        "available":              True,
-    }
-
-
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def run_all_forecasts(req) -> dict:
@@ -1041,7 +1017,6 @@ def run_all_forecasts(req) -> dict:
     insider:    dict = {}
     news_ctx:   dict = {}
     reddit_ctx: dict = {}
-    trends_ctx: dict = {}
     edgar_ctx:  dict = {}
 
     from concurrent.futures import ThreadPoolExecutor as _CtxPool
@@ -1085,16 +1060,6 @@ def run_all_forecasts(req) -> dict:
             logger.debug("RedditProvider skipped: %s", exc)
             return {}
 
-    def _safe_trends():
-        if not tickers:
-            return {}
-        try:
-            from .trends_provider import get_trends_context
-            return get_trends_context(tickers, last_date)
-        except Exception as exc:
-            logger.debug("TrendsProvider skipped: %s", exc)
-            return {}
-
     def _safe_edgar():
         if not tickers:
             return {}
@@ -1115,7 +1080,6 @@ def run_all_forecasts(req) -> dict:
         _provider_jobs.update({
             "news":   _safe_news,
             "reddit": _safe_reddit,
-            "trends": _safe_trends,
             "edgar":  _safe_edgar,
         })
 
@@ -1126,7 +1090,6 @@ def run_all_forecasts(req) -> dict:
         if is_phase2_request:
             news_ctx   = _ctx_futures["news"].result()   or {}
             reddit_ctx = _ctx_futures["reddit"].result() or {}
-            trends_ctx = _ctx_futures["trends"].result() or {}
             edgar_ctx  = _ctx_futures["edgar"].result()  or {}
 
     if macro_ctx:
@@ -1199,7 +1162,6 @@ def run_all_forecasts(req) -> dict:
                         "horizon_days":    21,
                         "insider_context": insider,
                         "reddit_context":  _portfolio_reddit(reddit_ctx, weights) or None,
-                        "trends_context":  _portfolio_trends(trends_ctx, weights) or None,
                         "news_article_count": news_ctx.get("portfolio_summary", {}).get("total_articles"),
                     },
                 ))
@@ -1230,7 +1192,6 @@ def run_all_forecasts(req) -> dict:
                         "lstm_features": out,
                         "architecture":  "Attention-LSTM(64) → Dense(32) → Dense(1)",
                         "attention":     "Bahdanau additive (CS230 2020)",
-                        "trends_context": _portfolio_trends(trends_ctx, weights) or None,
                         "news_article_count": news_ctx.get("portfolio_summary", {}).get("total_articles"),
                     },
                 ))
@@ -1248,8 +1209,6 @@ def run_all_forecasts(req) -> dict:
                 # 45 s cap — HMM fit on Railway's shared CPU runs ~10 s per
                 # restart and is the wall-clock bottleneck of Phase 2.
                 out = _pending_futures["hmm"].result(timeout=45)
-                if trends_ctx:
-                    out["metadata"]["trends_context"] = _portfolio_trends(trends_ctx, weights)
                 if news_ctx:
                     out["metadata"]["news_article_count"] = news_ctx.get("portfolio_summary", {}).get("total_articles")
                 # Phase 5A: 4-state regime classification after HMM (non-fatal)
@@ -1310,7 +1269,6 @@ def run_all_forecasts(req) -> dict:
 
     tier2_summary = {
         "reddit":  _portfolio_reddit(reddit_ctx, weights) if reddit_ctx else None,
-        "trends":  _portfolio_trends(trends_ctx, weights) if trends_ctx else None,
         "news_available": bool(news_ctx.get("portfolio_summary", {}).get("available")),
     }
 

@@ -60,13 +60,12 @@ function Diagram() {
 
       {/* Layer 0: Data sources */}
       <LayerLabel>① Data ingestion</LayerLabel>
-      <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
+      <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
         <Pill label="yfinance" sub="prices" color="#4a9eff" />
         <Pill label="FRED" sub="macro" color="#00d4aa" />
         <Pill label="GDELT" sub="news" color="#ffd43b" />
         <Pill label="EDGAR" sub="10-K/Q" color="#a855f7" />
         <Pill label="Reddit" sub="WSB" color="#ff6b35" />
-        <Pill label="Trends" sub="Google" color="#ff4757" />
       </div>
 
       <Arrow />

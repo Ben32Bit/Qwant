@@ -1,8 +1,15 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import SplitView from './SplitView.jsx'
 import TickerBar from './TickerBar.jsx'
+import { warmupBackend } from '../../utils/api.js'
 
 export default function App() {
+  // Wake the Railway container on mount so it's warm by the time the user
+  // runs their first backtest or forecast. Cold boots cost 30-60 s.
+  useEffect(() => {
+    warmupBackend()
+  }, [])
+
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--bg-primary)' }}>
       {/* Rolling market ticker — live prices + GDELT headlines + Reddit trending */}

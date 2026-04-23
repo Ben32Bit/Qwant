@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-04-24 — Forecast latency part 2: warm-up + speculative prewarm + drop pytrends
+
+Even with parallelised tier-1/2 providers, cold forecast latency was still painful. Three more offenders identified:
+
+1. **Railway free-tier cold boot** (30-60 s): first hit pays full Python + pandas + hmmlearn + statsmodels import cost. Independent of our code.
+2. **pytrends / Google Trends** (10-25 s): slowest provider, aggressive rate limiter, and the signal wasn't consumed by any model — purely display metadata.
+3. **Caches lost on Railway restart**: every cold boot re-fetches GDELT / Reddit / FRED from scratch.
+
+### Changes shipped
+
+1. **Warm-up ping on app mount** ([App.jsx](frontend/src/components/Layout/App.jsx), [api.js](frontend/src/utils/api.js) `warmupBackend()`). Fires `fetch('/health')` as soon as the React tree mounts so Railway's container is awake by the time the user clicks anywhere. 50-byte no-op endpoint — no provider I/O, unlike the ticker feed.
+
+2. **Speculative forecast prewarm** — new `POST /api/forecast/prewarm` endpoint ([forecast.py](backend/app/routers/forecast.py)). Fired from [useBacktest.js](frontend/src/hooks/useBacktest.js) as soon as a backtest completes. Backend returns immediately; an `asyncio.create_task` fans out `ThreadPoolExecutor` warmups for macro / insider / news / reddit / edgar. Provider caches are keyed on (tickers, date), so by the time the user clicks **Run Forecast** Phase 2 hits warm caches. No speculative *model* compute — only cache filling. If user edits portfolio, new ticker set just cache-misses (no worse than today).
+
+3. **Dropped pytrends entirely**. Removed `trends_provider.py`, `_portfolio_trends()`, `pytrends` from `requirements.txt`, and the Trends pill from [ForecastArchitecture.jsx](frontend/src/components/Dashboard/ForecastArchitecture.jsx) + all three `trends_context` pill reads in [ForecastMethodCard.jsx](frontend/src/components/Dashboard/ForecastMethodCard.jsx). Saves a ~10-25 s Phase 2 ceiling and trims a package dependency.
+
+Net expected cold-boot path (no cache):
+- Before: cold boot 30-60 s + Phase 1 ~35 s + Phase 2 ~40 s ≈ **105-135 s**
+- After: warm-up absorbed during page load + Phase 1 ~2 s + Phase 2 ~8 s (prewarm already done) ≈ **10-15 s**
+
+Files: `backend/app/services/forecast_engine.py`, `backend/app/routers/forecast.py`, `backend/app/services/trends_provider.py` (deleted), `backend/requirements.txt`, `frontend/src/utils/api.js`, `frontend/src/components/Layout/App.jsx`, `frontend/src/hooks/useBacktest.js`, `frontend/src/components/Dashboard/ForecastArchitecture.jsx`, `frontend/src/components/Dashboard/ForecastMethodCard.jsx`.
+
+---
+
 ## 2026-04-24 — Forecast latency: parallelise tier-1/2 providers + skip tier-2 in Phase 1
 
 Forecast Phase 1 and Phase 2 were both bottlenecked on sequential provider I/O. Six providers (FRED macro + VIX, SEC insider, GDELT news, Reddit, Google Trends, EDGAR 10-K/10-Q) ran serially before any method dispatched in [forecast_engine.py](backend/app/services/forecast_engine.py) — cold-cache 5-ticker requests burned 30-50s on pure network I/O before any model touched the data. Tier-2 text providers also accreted across Phase 3/4/7 (commits `7636c15`, `006433b`, `96654e8`) without ever being folded into a parallel fan-out.
