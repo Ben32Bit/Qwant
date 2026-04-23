@@ -1,6 +1,6 @@
 {
   "format": "layers-model",
-  "generatedBy": "keras 2.21.0 (legacy tf_keras)",
+  "generatedBy": "keras 2.19.0 (legacy tf_keras)",
   "convertedBy": "manual (train_lstm.py)",
   "modelTopology": {
     "class_name": "Functional",
@@ -20,8 +20,7 @@
             "dtype": "float32",
             "sparse": false,
             "ragged": false,
-            "name": "input",
-            "optional": false
+            "name": "input"
           },
           "registered_name": null,
           "name": "input",
@@ -476,7 +475,7 @@
             "trainable": true,
             "dtype": "float32",
             "units": 1,
-            "activation": "linear",
+            "activation": "tanh",
             "use_bias": true,
             "kernel_initializer": {
               "module": "keras.initializers",
@@ -533,7 +532,7 @@
         ]
       ]
     },
-    "keras_version": "2.21.0",
+    "keras_version": "2.19.0",
     "backend": "tensorflow"
   },
   "weightsManifest": [
