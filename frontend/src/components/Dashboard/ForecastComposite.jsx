@@ -1,9 +1,9 @@
-import React, { useMemo, memo } from 'react'
+import React, { useMemo, useState, memo } from 'react'
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ReferenceLine, ResponsiveContainer,
 } from 'recharts'
-import { AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE } from '../../utils/chartConfig.js'
+import { AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE, CHART_COLORS } from '../../utils/chartConfig.js'
 
 const METHOD_ORDER  = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
 const METHOD_LABELS = { xgboost: 'XGBoost', nbeats: 'N-BEATS', factor: 'Factor', hmm: 'HMM', var: 'GP', lstm: 'LSTM' }
@@ -13,11 +13,12 @@ const METHOD_COLORS = { xgboost: '#4a9eff', nbeats: '#ffd43b', factor: '#00d4aa'
 // lines. Kept in sync with HORIZON_CAPS_DAYS in useForecast.js.
 const HORIZON_CAPS_DAYS = { xgboost: 21, nbeats: 63 }
 
-function fmtVal(v) {
+// Y-axis: cumulative % return from the start of the user's backtest.
+// Historical and forecast are both expressed against the same anchor so the
+// line is continuous through the forecast-start divider.
+function fmtPct(v) {
   if (v == null) return '—'
-  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`
-  if (v >= 1_000)     return `$${(v / 1_000).toFixed(1)}k`
-  return `$${v.toFixed(0)}`
+  return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`
 }
 
 function CompositeTooltip({ active, payload, label }) {
@@ -32,7 +33,7 @@ function CompositeTooltip({ active, payload, label }) {
           <div key={p.dataKey} className="mono text-xs flex items-center gap-2">
             <span style={{ color: p.color }}>■</span>
             <span style={{ color: 'var(--text-secondary)' }}>{p.name}:</span>
-            <span style={{ color: p.color }}>{fmtVal(p.value)}</span>
+            <span style={{ color: p.color }}>{fmtPct(p.value)}</span>
           </div>
         ))}
     </div>
@@ -260,22 +261,28 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
   const chartData = useMemo(() => {
     if (!equityCurve?.length) return []
 
-    // Historical: use actual portfolio values (downsampled to cap SVG nodes)
+    // Anchor at the first historical value so the Y-axis reads as cumulative
+    // % return from the user's backtest start. Forecast lines compound the
+    // current portfolio cumulative return with each model's projected p50.
+    const firstValue = equityCurve[0].value
+    const lastValue  = equityCurve[equityCurve.length - 1].value
+    const toPct      = v => (v / firstValue - 1) * 100
+
     const historical = downsampleHistorical(equityCurve).map(pt => ({
-      date:       pt.date,
-      Historical: pt.value,
+      date:      pt.date,
+      Portfolio: toPct(pt.value),
     }))
 
-    // Last historical value is the anchor for all forecast projections
-    const lastValue = equityCurve[equityCurve.length - 1].value
+    // Each method's p50[i] is cumulative % return from forecast start, so
+    // projected_value = lastValue × (1 + p50/100), then re-anchor to start.
+    const projectFromForecast = pct50 => toPct(lastValue * (1 + pct50 / 100))
 
-    // Convert each method's cumulative-% p50 forecast to actual dollar values
     const forecastByDate = {}
     for (const r of (results ?? [])) {
       if (!r.forecast) continue
       r.forecast.dates.forEach((d, i) => {
         if (!forecastByDate[d]) forecastByDate[d] = { date: d }
-        forecastByDate[d][r.method] = lastValue * (1 + r.forecast.p50[i] / 100)
+        forecastByDate[d][r.method] = projectFromForecast(r.forecast.p50[i])
       })
     }
 
@@ -284,7 +291,7 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
     if (ensemble?.band?.dates?.length && ensemble.band.p50?.length) {
       ensemble.band.dates.forEach((d, i) => {
         if (!forecastByDate[d]) forecastByDate[d] = { date: d }
-        forecastByDate[d].ensemble = lastValue * (1 + ensemble.band.p50[i] / 100)
+        forecastByDate[d].ensemble = projectFromForecast(ensemble.band.p50[i])
       })
     }
 
@@ -292,10 +299,31 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
     return [...historical, ...forecastRows]
   }, [equityCurve, results, ensemble])
 
+  // ── Zoom slider state ────────────────────────────────────────────────────
+  // The user can drag the start of the visible window forward; the right edge
+  // is fixed at the forecast end. Slider value is an index into chartData;
+  // max is the last historical row (so users can't slide past forecast start
+  // and end up looking at a chart with no anchor).
+  const lastHistoricalIdx = useMemo(() => {
+    if (!chartData.length) return 0
+    if (!forecastStart) return chartData.length - 1
+    let last = 0
+    for (let i = 0; i < chartData.length; i++) {
+      if (chartData[i].date < forecastStart) last = i
+    }
+    return last
+  }, [chartData, forecastStart])
+
+  const [viewStartIdx, setViewStartIdx] = useState(0)
+  const clampedStartIdx = Math.min(viewStartIdx, lastHistoricalIdx)
+  const visibleData     = useMemo(() =>
+    chartData.slice(clampedStartIdx),
+    [chartData, clampedStartIdx])
+
   const tickCount = 10
-  const tickDates = chartData.length
+  const tickDates = visibleData.length
     ? Array.from({ length: tickCount }, (_, i) =>
-        chartData[Math.floor((i / (tickCount - 1)) * (chartData.length - 1))]?.date
+        visibleData[Math.floor((i / (tickCount - 1)) * (visibleData.length - 1))]?.date
       ).filter(Boolean)
     : []
 
@@ -354,7 +382,7 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
       </div>
 
       <ResponsiveContainer width="100%" height={240}>
-        <ComposedChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
+        <ComposedChart data={visibleData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
           <CartesianGrid {...GRID_STYLE} />
           <XAxis
             dataKey="date"
@@ -368,8 +396,8 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
             tick={AXIS_STYLE.tick}
             axisLine={AXIS_STYLE.axisLine}
             tickLine={AXIS_STYLE.tickLine}
-            tickFormatter={fmtVal}
-            width={60}
+            tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`}
+            width={50}
           />
           {forecastStart && (
             <ReferenceLine
@@ -406,15 +434,17 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
             wrapperStyle={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: 'var(--text-secondary)' }}
           />
 
-          {/* Historical portfolio value */}
+          {/* Historical portfolio cumulative return — same blue used for the
+              Portfolio line in the Results tab so the forecast reads as a
+              continuation of the same series. */}
           <Line
             type="monotone"
-            dataKey="Historical"
-            stroke="var(--text-secondary)"
-            strokeWidth={1.5}
+            dataKey="Portfolio"
+            name="Your Portfolio"
+            stroke={CHART_COLORS.portfolio}
+            strokeWidth={2}
             dot={false}
             isAnimationActive={false}
-            strokeDasharray="3 3"
           />
 
           {/* One median projection line per method */}
@@ -452,6 +482,50 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
           )}
         </ComposedChart>
       </ResponsiveContainer>
+
+      {/* Zoom slider — moves the visible window's left edge forward; right
+          edge stays pinned to the forecast end so the user can zoom into
+          the recent past + projection without losing the tail. */}
+      {lastHistoricalIdx > 0 && (
+        <div className="flex items-center gap-3 mt-2">
+          <span className="mono flex-shrink-0" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.7 }}>
+            Zoom
+          </span>
+          <span className="mono flex-shrink-0" style={{ fontSize: 9, color: 'var(--text-secondary)', minWidth: 64 }}>
+            {visibleData[0]?.date ?? '—'}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={lastHistoricalIdx}
+            value={clampedStartIdx}
+            onChange={e => setViewStartIdx(+e.target.value)}
+            className="flex-1 cursor-pointer"
+            style={{ accentColor: CHART_COLORS.portfolio }}
+            aria-label="Forecast chart zoom — drag right to focus on the tail"
+          />
+          <span className="mono flex-shrink-0" style={{ fontSize: 9, color: 'var(--text-secondary)', minWidth: 64, textAlign: 'right' }}>
+            {visibleData[visibleData.length - 1]?.date ?? '—'}
+          </span>
+          {clampedStartIdx > 0 && (
+            <button
+              onClick={() => setViewStartIdx(0)}
+              className="mono flex-shrink-0"
+              style={{
+                fontSize: 9,
+                padding: '2px 6px',
+                borderRadius: 3,
+                border: '1px solid var(--border)',
+                background: 'transparent',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+              }}
+            >
+              reset
+            </button>
+          )}
+        </div>
+      )}
 
       <EnsembleDegradationStrip capDates={capDates} forecastHorizon={forecastHorizon} />
     </div>
