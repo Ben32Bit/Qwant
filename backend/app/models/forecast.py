@@ -17,7 +17,7 @@ class ForecastRequest(BaseModel):
     assets: list[ForecastAsset]
     start_date: str                   # YYYY-MM-DD
     end_date: str                     # YYYY-MM-DD (last historical date)
-    horizon_days: int = 252
+    horizon_days: int = 63
     n_paths: int = 1000
     methods: list[str] = ["xgboost", "nbeats", "factor", "hmm", "var", "lstm"]
     ff5_decomposition: Optional[dict] = None

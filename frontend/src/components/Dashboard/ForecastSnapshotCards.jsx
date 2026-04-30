@@ -145,7 +145,7 @@ function SnapshotCard({ label, days, idx, basis, results, ensemble, lastValue })
  *
  * Each horizon is chosen so the shortest-training model (XGBoost, 21d) is still
  * within (or at) its cap, keeping all figures academically defensible. The
- * continuous 12-month chart elsewhere is exploratory only.
+ * continuous 3-month chart elsewhere is exploratory only.
  */
 export default function ForecastSnapshotCards({ results, ensemble, lastValue, loading }) {
   const hasAny = (results ?? []).some(r => r?.forecast?.p50?.length)

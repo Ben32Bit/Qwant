@@ -152,7 +152,7 @@ function Diagram() {
       {/* Layer 6: Outputs */}
       <LayerLabel>⑧ Outputs</LayerLabel>
       <div className="flex gap-2">
-        <Box label="Fan charts" sub="p5/p25/p50/p75/p95 bands at 252 days" color="#4a9eff" tag="per method" />
+        <Box label="Fan charts" sub="p5/p25/p50/p75/p95 bands at 63 days" color="#4a9eff" tag="per method" />
         <Box label="Kelly sizing" sub="f* = μ/σ² · half-Kelly · regime adj" color="#00d4aa" tag="position size" />
         <Box label="Scenario stress" sub="6 macro regimes · weight + Kelly delta" color="#ffd43b" tag="what-if" />
         <Box label="FinBERT" sub="News + SEC filings · browser NLP" color="#a855f7" tag="sentiment" />

@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-04-24 — Cut forecast look-forward 252d (12 months) → 63d (3 months)
+
+### Rationale
+
+A 12-month projection from a 6-method ensemble is academically over-promising:
+XGBoost (21d cap) and N-BEATS (63d cap) drop out past their training horizons,
+so the back third of the line was effectively a 4-method projection labelled
+as 6-method. Cutting to 3 months puts every method *inside* its honest range,
+exposes more of the path the user is actually trading on, and as a side effect
+makes Phase 2 ~4× faster on the model compute (HMM Monte Carlo and GP rollout
+both shrink linearly with horizon).
+
+### Inputs/outputs check across all 6 methods at horizon=63
+
+| Method | Behaviour |
+|---|---|
+| XGBoost (cap=21d) | Still extrapolates 21→63 via √t — same heuristic, but only 3 periods of compounding instead of 12. Cap unchanged. |
+| N-BEATS (cap=63d) | **Cap now exactly matches horizon** — 3 recursive 21d blocks cover the full 63d. Inferer was hardcoded to 12 periods; rewrote to derive `numPeriods = ceil(forecastDates.length / 21)` from request length and trim the trailing partial period. |
+| Factor | GBM, native any horizon. 4× fewer simulated paths. |
+| HMM | Monte Carlo simulation, native any horizon. ~4× faster. |
+| GP | 63 sequential `.predict()` calls instead of 252. ~4× faster. |
+| LSTM | Browser MC-Dropout rollout, native any horizon. ~4× faster on browser too. |
+
+### What changed
+
+**Forecast horizon (252 → 63):**
+- [backend/app/models/forecast.py](backend/app/models/forecast.py) — Pydantic `horizon_days` default
+- [frontend/src/hooks/useForecast.js](frontend/src/hooks/useForecast.js) — request body
+- [frontend/src/ml/XGBoostInferer.js](frontend/src/ml/XGBoostInferer.js) — dropped unused `HORIZON = 252` constant; renamed `extrapolate252()` → `extrapolateMultiPeriod()` since it's driven by `forecastDates.length` anyway
+- [frontend/src/ml/NBeatsInferer.js](frontend/src/ml/NBeatsInferer.js) — replaced hardcoded `PERIODS = 12` with `numPeriods = ceil(target/21)`; trim final partial period to exact horizon
+- [frontend/src/ml/KellyCalculator.js](frontend/src/ml/KellyCalculator.js) — endpoint index now `T - 1` (was `min(T-1, 251)`); annualise μ and σ from horizon basis using `√(252/h)` for σ and `(1+r_h)^(252/h) - 1` for μ. Kelly fraction is scale-invariant so the recommendation doesn't change at the same μ/σ ratio.
+
+**UI text (12 months → 3 months / 252 days → 63 days):**
+ForecastPanel header + collapsed-chart label, ForecastComposite header + table column, ForecastArchitecture output pill, ForecastSnapshotCards docstring, ForecastMethodCard descriptions for XGBoost (252d → 63d) and N-BEATS (12 periods → 3 periods), ForecastExport HTML report methodology footer, README forecast section + getting-started step.
+
+**Stayed at 252 (annualisation factors, NOT horizon):**
+- All `TRADING_DAYS = 252` constants used for `× √252` volatility annualisation, CAGR, alpha annualisation
+- 252-day rolling Sharpe window in `backtest_engine.py` (1-year backward window on historical returns)
+- LSTM training-time validation gate (12-month rolling held-out window — separate concept from forecast horizon)
+- HMM regime endpoint trains on "last 252 trading days" (training window, not forecast)
+
+### Side effect: Phase 2 should drop another ~4× on the model compute
+
+After yesterday's HMM/GP-overlapping-providers fix, Phase 2 was at ~20s warm /
+40-60s cold. Cutting horizon should drop the model compute itself by ~75%, but
+since cold boot (30-60s) and tier-2 providers (15-25s) dominate cold-cache wall
+clock, the user-visible cold improvement is modest (~10s). Warm-cache should
+drop to <10s.
+
+Files: `backend/app/models/forecast.py`, `backend/app/services/forecast_engine.py`, `backend/app/routers/forecast.py`, `backend/scripts/{test_forecast_methods,train_xgboost,train_nbeats}.py`, `frontend/src/hooks/useForecast.js`, `frontend/src/ml/{KellyCalculator,XGBoostInferer,NBeatsInferer,LSTMInferer}.js`, `frontend/src/components/Dashboard/{ForecastPanel,ForecastComposite,ForecastArchitecture,ForecastExport,ForecastSnapshotCards,ForecastMethodCard}.jsx`, `README.md`.
+
+---
+
 ## 2026-04-24 — Phase 2 latency: overlap HMM/GP with tier-2 providers + drop HMM restart
 
 User screenshot showed Phase 2 ETA bar at **+92s — still running**, triggering the Cloudflare 502. Traced two concrete serialisations in [forecast_engine.py](backend/app/services/forecast_engine.py::run_all_forecasts):

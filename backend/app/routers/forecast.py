@@ -18,7 +18,7 @@ router = APIRouter()
 @limiter.limit(FCST_LIMITS)
 async def run_forecast(request: Request, body: ForecastRequest):
     """
-    Run probabilistic 12-month portfolio forecasts using up to 6 methods.
+    Run probabilistic 3-month portfolio forecasts using up to 6 methods.
 
     Methods: xgboost | nbeats | factor | hmm | var | lstm
 

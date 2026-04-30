@@ -40,7 +40,7 @@ An AI-powered portfolio construction, backtesting, and forecasting platform. Des
 - Risk-adjusted: Sharpe, Sortino, Calmar, Information Ratio, Treynor
 - Benchmark-relative: Beta, Jensen's Alpha, R², Tracking Error, Active Return, Up/Down Capture
 
-**12-month forecast engine** (six research-backed methods, every one walk-forward OOS validated)
+**3-month forecast engine** (six research-backed methods, every one walk-forward OOS validated)
 - **XGBoost quantile regression** — 21-day horizon, client-side ONNX inference
 - **N-BEATS** — neural basis expansion, 63-day recursive forecast, client-side ONNX
 - **Factor model (FF5)** — Fama-French 5-factor decomposition
@@ -140,7 +140,7 @@ The LSTM is **retrained weekly** via GitHub Actions (`.github/workflows/retrain-
    - *"most uncorrelated 5-asset portfolio from large-cap US"*
 3. Qwant resolves the description to tickers + weights, runs the backtest, and renders the full dashboard.
 4. Refine in plain English: *"add 10% gold"*, *"change to monthly rebalancing"*, *"benchmark against QQQ instead"*.
-5. Click **Run Forecast** in the Forecast panel to kick off the six-model 12-month projection.
+5. Click **Run Forecast** in the Forecast panel to kick off the six-model 3-month projection.
 6. Export as PNG (full forecast sheet including scenario tester) or Excel (all metrics + equity curve).
 
 ---

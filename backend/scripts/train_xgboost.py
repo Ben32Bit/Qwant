@@ -31,7 +31,7 @@ Features (14 scalar values):
   real_yield_10y    : 10Y TIPS real yield (higher = tighter financial conditions)
 
 Target: 21-day forward cumulative return.
-Horizon extrapolation: client scales first-period bands to 252 days via sqrt(t/21).
+Horizon extrapolation: client scales first-period bands to 63 days via sqrt(t/21).
 
 Out-of-sample methodology:
   Purged walk-forward CV with 21-day embargo per López de Prado (2018, Ch. 7).

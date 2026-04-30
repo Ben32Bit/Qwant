@@ -2,7 +2,7 @@
 Forecast Engine — 6 Research-Backed Portfolio Forecasting Methods
 =================================================================
 
-All methods produce 12-month (252-trading-day) probabilistic forecasts as
+All methods produce 3-month (63-trading-day) probabilistic forecasts as
 percentile fan bands (p5/p25/p50/p75/p95) over the portfolio equity curve.
 
 Out-of-sample integrity
@@ -158,9 +158,9 @@ def _ledoit_wolf_cov(returns_df: pd.DataFrame) -> np.ndarray:
 # The ONNX models include StandardScaler as preprocessing nodes (Pipeline →
 # ONNX), so XGBoostInferer.js passes raw unscaled features directly.
 #
-# Fan chart extrapolation (client-side, 21d → 252d):
+# Fan chart extrapolation (client-side, 21d → 63d):
 #   The models predict 21-day cumulative return distributions.
-#   For the 252-day chart, the client scales the 21-day bands using:
+#   For the 63-day chart, the client scales the 21-day bands using:
 #     median(t) = (1 + p50_21d)^(t/21) − 1
 #     spread(t) = half_spread_21d × sqrt(t/21)   [i.i.d. scaling]
 #
@@ -319,8 +319,8 @@ def prepare_xgboost_features(
 #   Input:  [1, 30]    — last 30 daily returns (normalised)
 #   Output: [1, 21, 5] — 21-day × 5-quantile forecast (normalised daily returns)
 #
-# Fan chart (client-side, 12 recursive 21-day periods → 252 days):
-#   The client runs the model 12 times; each iteration uses p50 of the previous
+# Fan chart (client-side, 3 recursive 21-day periods → 63 days):
+#   The client runs the model 3 times; each iteration uses p50 of the previous
 #   forecast as the new input window (direct multi-step rollout).
 #   This gives a proper compound-return fan chart with uncertainty that grows
 #   organically from the model's learned sequence dynamics.
@@ -684,7 +684,7 @@ def forecast_factor(
 #   Input X: rolling 7-day return window (ARD Matérn features per lag)
 #   Kernel:  ConstantKernel × Matérn(ν=5/2, ARD) + WhiteKernel
 #   Output:  one-step predictive N(μ_t, σ_t²)
-#   Rollout: 252 steps, advancing window with predictive mean
+#   Rollout: 63 steps, advancing window with predictive mean
 #   Fan chart: cumulative returns ~ N(Σμ_t, Σσ_t²) (Gaussian approximation)
 #
 # References
@@ -703,7 +703,7 @@ def forecast_gp(
     last_date: str,
 ) -> dict:
     """
-    Gaussian Process autoregression for 252-day portfolio return forecasting.
+    Gaussian Process autoregression for 63-day portfolio return forecasting.
 
     Fits an ARD Matérn 5/2 GP on the most recent daily returns using a
     rolling-window autoregressive framing (X = last 7 returns, y = next return).
@@ -780,7 +780,7 @@ def forecast_gp(
             + (y_val - mu_val) ** 2 / (2 * std_val ** 2 + 1e-10)
         )), 4)
 
-    # 252-step rollout: advance window with GP predictive mean each step
+    # Horizon-step rollout: advance window with GP predictive mean each step
     window = list(r[-LOOKBACK:])
     mu_fwd  = np.empty(horizon)
     std_fwd = np.empty(horizon)

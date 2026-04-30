@@ -19,7 +19,6 @@
 const QUANTILE_TAGS = ['q05', 'q25', 'q50', 'q75', 'q95']
 const MODEL_BASE    = '/models/xgboost'
 const META_URL      = `${MODEL_BASE}/meta.json`
-const HORIZON       = 252
 const PERIOD_DAYS   = 21
 const CREATE_TIMEOUT_MS = 15_000
 const RUN_TIMEOUT_MS    = 10_000
@@ -152,7 +151,7 @@ async function predict21d(features) {
   return results
 }
 
-function extrapolate252(preds21, forecastDates) {
+function extrapolateMultiPeriod(preds21, forecastDates) {
   const { q05, q25, q50, q75, q95 } = preds21
   const halfInner = (q75 - q25) / 2
   const halfOuter = (q95 - q05) / 2
@@ -173,5 +172,5 @@ function extrapolate252(preds21, forecastDates) {
 
 export async function inferXGBoost({ features, forecastDates }) {
   const preds21 = await predict21d(features)
-  return extrapolate252(preds21, forecastDates)
+  return extrapolateMultiPeriod(preds21, forecastDates)
 }

@@ -3,13 +3,12 @@ import { useState, useCallback, useRef, useMemo } from 'react'
 const PHASE1_METHODS = ['xgboost', 'nbeats', 'factor']
 const PHASE2_METHODS = ['hmm', 'var', 'lstm']
 
-// Per-method horizon caps (trading days). Methods trained on a short target
-// shouldn't masquerade as full-year forecasters — XGBoost's 21-day quantile
-// regressor extrapolates to 252d via √t scaling (heuristic, not earned), and
-// N-BEATS stacks twelve 21-day recursive predictions (error compounds fast).
-// Factor / HMM / GP / LSTM simulate the full path directly, so they run the
-// full horizon. Truncating here also drives the ensemble's "model count"
-// degradation past each cap.
+// Per-method horizon caps (trading days). Forecast horizon is 63 days
+// (3 months). XGBoost's quantile regressor is trained on a 21-day target,
+// so its extrapolation past day 21 is √t-scaled (heuristic, not earned).
+// N-BEATS' native horizon is 63d (three 21-day recursive blocks) — exactly
+// matches the new horizon, so the cap is a no-op but kept for clarity.
+// Factor / HMM / GP / LSTM simulate the full 63-day path directly.
 export const HORIZON_CAPS_DAYS = { xgboost: 21, nbeats: 63 }
 
 function capBand(band, maxDays) {
@@ -55,7 +54,7 @@ export function useForecast(backtest, portfolio) {
       assets:            portfolio?.assets ?? [],
       start_date:        portfolio?.start_date ?? backtest.equity_curve[0]?.date,
       end_date:          portfolio?.end_date   ?? backtest.equity_curve.at(-1)?.date,
-      horizon_days:      252,
+      horizon_days:      63,
       n_paths:           1000,
       ff5_decomposition: backtest.ff5_decomposition ?? null,
     }

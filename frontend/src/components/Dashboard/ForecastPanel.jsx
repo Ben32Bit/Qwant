@@ -37,9 +37,9 @@ function CompositeChartSection({ children }) {
         className="mono text-xs cursor-pointer select-none mb-2 w-full text-left"
         style={{ color: 'var(--text-secondary)', opacity: 0.75, background: 'transparent', border: 'none', padding: '4px 0' }}
       >
-        {open ? '▾' : '▸'} 12-month exploratory chart
+        {open ? '▾' : '▸'} 3-month exploratory chart
         <span className="ml-2" style={{ opacity: 0.6 }}>
-          · short-horizon models capped; interpret with caution past 3 months
+          · XGBoost capped at 21 days; full ensemble runs to 63 trading days
         </span>
       </button>
       {open && children}
@@ -196,7 +196,7 @@ export default function ForecastPanel({ backtest, portfolio, forecast }) {
             <h2 className="mono font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
               ◈ FORECAST
               <span className="ml-2 font-normal text-xs" style={{ color: 'var(--text-secondary)' }}>
-                · Next 12 months · 6 research-backed methods
+                · Next 3 months · 6 research-backed methods
               </span>
             </h2>
             <p className="mono text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>

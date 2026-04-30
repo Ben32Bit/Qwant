@@ -24,8 +24,9 @@ Input  → shape [batch, 30]    (last 30 daily returns)
 Output → shape [batch, 21, 5] (21-step forecast × 5 quantiles, as daily returns)
 
 Multi-horizon fan chart (in NBeatsInferer.js):
-  Run 12 recursive 21-day periods to produce the 252-day fan chart.
-  Each period uses the p50 median of the previous period's output as the new input window.
+  Run ceil(target_days / 21) recursive 21-day periods to produce the fan chart.
+  At the current 63-day forecast horizon that's 3 periods exactly. Each period
+  uses the p50 median of the previous period's output as the new input window.
 
 Out-of-sample methodology:
   Chronological 70/15/15 train/val/test split across all assets.

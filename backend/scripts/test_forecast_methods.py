@@ -88,7 +88,7 @@ def run_case(case_name: str, equity: pd.Series) -> None:
     print(f"\n-- Case: {case_name}  (n={len(equity)} days, final=${equity.iloc[-1]:,.0f})")
     returns   = series_to_returns(equity)
     last_date = equity.index[-1].strftime("%Y-%m-%d")
-    horizon   = 252
+    horizon   = 63
     n_paths   = 1000
 
     def timed(name: str, fn):
@@ -136,7 +136,7 @@ def run_case(case_name: str, equity: pd.Series) -> None:
         p50_last = out["band"]["p50"][-1]
         print(
             f"  [{status}] {name:18s} {dt:6.2f}s  budget={BUDGETS_S[name]}s  "
-            f"band={flag} ({msg})  p50(252d)={p50_last:+.1f}%"
+            f"band={flag} ({msg})  p50({horizon}d)={p50_last:+.1f}%"
         )
 
 

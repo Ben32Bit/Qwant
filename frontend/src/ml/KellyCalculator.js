@@ -4,8 +4,11 @@
  * Derivation:
  *   For a continuous log-normal return distribution with expected return μ and
  *   variance σ², the growth-optimal (Kelly) portfolio fraction is f* = μ / σ².
- *   We estimate μ from the ensemble p50 at the 1-year horizon and σ from the
- *   90% confidence interval: σ ≈ (p95 − p5) / (2 × 1.645).
+ *   We estimate μ from the ensemble p50 at the forecast endpoint and σ from
+ *   the 90% confidence interval: σ ≈ (p95 − p5) / (2 × 1.645). Both are then
+ *   scaled to a 1-year basis so the displayed return/vol remain annualised
+ *   regardless of the underlying forecast horizon. The Kelly fraction itself
+ *   is scale-invariant under this rescaling.
  *
  *   Half-Kelly (f* divided by 2) is the standard practical recommendation: it gives 75% of
  *   the long-run growth rate with far lower drawdown risk.
@@ -37,17 +40,25 @@ export function computeKellyFromEnsemble(ensemble, halfKelly = true) {
   if (!ensemble?.p50?.length) return null
 
   const T    = ensemble.p50.length
-  const idx  = Math.min(T - 1, 251)   // 1-year horizon (trading day 252)
+  const idx  = T - 1                        // last forecast point
+  const horizonDays   = T
+  const annualFactor  = 252 / horizonDays   // 1.0 at 252d, 4.0 at 63d
 
-  const p50  = ensemble.p50[idx] / 100   // decimal cumulative return at 1y
-  const p5   = ensemble.p5[idx]  / 100
-  const p95  = ensemble.p95[idx] / 100
+  const p50_h = ensemble.p50[idx] / 100   // decimal cumulative return over horizon
+  const p5_h  = ensemble.p5[idx]  / 100
+  const p95_h = ensemble.p95[idx] / 100
 
-  // Annualized vol from the 90% CI (assumes log-normal, valid approximation for 1y)
-  const sigma  = Math.max((p95 - p5) / (2 * Z90), 0.01)   // floor at 1% to avoid div/0
-  const sigma2 = sigma * sigma
+  // Annualise: variance scales linearly with time, so σ_h = σ_y × √(h/252).
+  // Inverting: σ_y = σ_h × √(252/h). Floor at 1% to avoid div/0.
+  const sigma_h     = Math.max((p95_h - p5_h) / (2 * Z90), 0.01)
+  const sigma_annual = sigma_h * Math.sqrt(annualFactor)
 
-  const fullKelly = p50 / sigma2
+  // Annualise mean: compound the horizon return (1 + r_h)^(252/h) - 1.
+  const mu_annual = Math.pow(1 + p50_h, annualFactor) - 1
+
+  // Kelly fraction is scale-invariant under time rescaling: f = μ/σ² is the
+  // same whether μ and σ² are both at the horizon or both annualised.
+  const fullKelly = mu_annual / (sigma_annual * sigma_annual)
   const raw       = halfKelly ? fullKelly / 2 : fullKelly
   const fraction  = Math.max(0, Math.min(raw, 2.0))  // clip to [0, 2×]
 
@@ -62,8 +73,8 @@ export function computeKellyFromEnsemble(ensemble, halfKelly = true) {
   return {
     fraction:         +fraction.toFixed(3),
     fullKelly:        +fullKelly.toFixed(3),
-    annualizedReturn: +(p50 * 100).toFixed(2),
-    annualizedVol:    +(sigma * 100).toFixed(2),
+    annualizedReturn: +(mu_annual * 100).toFixed(2),
+    annualizedVol:    +(sigma_annual * 100).toFixed(2),
     level,
     clipped:          raw !== fraction,
     halfKelly,

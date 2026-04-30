@@ -28,7 +28,7 @@ const CLIP_SIGMAS  = 3.0
 
 // ── Sense-check envelope for the autoregressive rollout ───────────────────────
 // With scale-invariant features the rollout is far more stable (features can't
-// saturate a scaler), but MC Dropout × 252-step autoregression on a small LSTM
+// saturate a scaler), but MC Dropout × 63-step autoregression on a small LSTM
 // can still produce tails beyond what's realistic. These envelopes bound it.
 const CUM_CLIP_LO         = -0.60  // hard floor on cumulative return per path
 const CUM_CLIP_HI         =  2.00  // hard ceiling on cumulative return per path

@@ -118,7 +118,7 @@ function MethodEffectivenessTable({ results, ensemble }) {
         <div className="mono px-3 py-1.5" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>METHOD</div>
         <div className="mono px-3 py-1.5" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>ENSEMBLE WEIGHT</div>
         <div className="mono px-3 py-1.5 text-center" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>OOS FIT</div>
-        <div className="mono px-3 py-1.5 text-right" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>12M MEDIAN</div>
+        <div className="mono px-3 py-1.5 text-right" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>3M MEDIAN</div>
       </div>
       {rows.map(({ method, r, w, ql, p50end }) => {
         const color = METHOD_COLORS[method]
@@ -159,7 +159,7 @@ function MethodEffectivenessTable({ results, ensemble }) {
                 <span className="mono" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.4 }}>—</span>
               )}
             </div>
-            {/* 12-month p50 endpoint */}
+            {/* 3-month p50 endpoint */}
             <div className="px-3 py-2 text-right">
               {p50end != null ? (
                 <span className="mono font-bold" style={{ fontSize: 9, color }}>
@@ -196,7 +196,7 @@ function MethodEffectivenessTable({ results, ensemble }) {
  */
 // Small footer strip visualising how the ensemble's active-model count
 // degrades past each horizon cap. Segments are proportional to the day
-// ranges; width reflects that XGBoost only covers 21/252 ≈ 8% of the axis.
+// ranges; with a 63d horizon XGBoost covers 21/63 ≈ 33% of the axis.
 function EnsembleDegradationStrip({ capDates, forecastHorizon }) {
   if (!forecastHorizon) return null
   const segs = [
@@ -337,7 +337,7 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
           <h3 className="mono font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
             Composite Forecast
             <span className="ml-2 font-normal text-xs" style={{ color: 'var(--text-secondary)' }}>
-              · projected portfolio value · next 12 months
+              · projected portfolio value · next 3 months
             </span>
           </h3>
           <div className="flex items-center gap-2">

@@ -9,9 +9,11 @@
  *   Residual composition: input = input - backcast; total_forecast += forecast.
  *   Output: [21, 5] daily return quantiles [p5, p25, p50, p75, p95].
  *
- * Fan chart (12 × 21 = 252 days):
- *   12 recursive periods. Each period runs one forward pass on the current 30-day
- *   window, then advances the window using p50 predictions.
+ * Fan chart (period count derived from forecastDates.length):
+ *   Ceil(forecastDays / 21) recursive periods. Each period runs one forward
+ *   pass on the current 30-day window, then advances the window using p50
+ *   predictions. Output is trimmed to forecastDates.length, so a non-multiple
+ *   of 21 (e.g. 63) consumes the last partial period and clips precisely.
  *   Uncertainty scales ×√(k+1) across periods (i.i.d. approximation).
  *
  * References:
@@ -24,7 +26,6 @@ const WEIGHTS_PATH = '/models/nbeats/weights.bin'
 const META_PATH    = '/models/nbeats/meta.json'
 const LOOKBACK     = 30
 const HORIZON      = 21
-const PERIODS      = 12
 const HIDDEN       = 256
 const Q_IDX        = { p5: 0, p25: 1, p50: 2, p75: 3, p95: 4 }
 
@@ -149,16 +150,22 @@ function compoundPeriod(daily) {
 /**
  * @param {object} opts
  * @param {number[]} opts.lastWindow     - 30 raw daily returns (from server)
- * @param {string[]} opts.forecastDates  - 252 business-day date strings
- * @returns {Promise<{dates, p5, p25, p50, p75, p95}>} 252-day fan chart (cumulative %)
+ * @param {string[]} opts.forecastDates  - business-day date strings (any length)
+ * @returns {Promise<{dates, p5, p25, p50, p75, p95}>} fan chart (cumulative %)
  */
 export async function inferNBeats({ lastWindow, forecastDates }) {
   const { weights, meta } = await getModel()
 
+  // Derive period count from the requested horizon. forecastDates.length is
+  // the authoritative target — we run ceil(target/HORIZON) periods and trim
+  // the final partial period to exact length.
+  const targetDays = forecastDates.length
+  const numPeriods = Math.max(1, Math.ceil(targetDays / HORIZON))
+
   let window = [...lastWindow]
   const periods = []
 
-  for (let k = 0; k < PERIODS; k++) {
+  for (let k = 0; k < numPeriods; k++) {
     const preds    = runOnePeriod(window, weights, meta)  // [21][5]
     const p50Daily = preds.map(row => row[Q_IDX.p50])
 
@@ -174,11 +181,11 @@ export async function inferNBeats({ lastWindow, forecastDates }) {
     window = [...window.slice(HORIZON), ...p50Daily]
   }
 
-  // Build 252-day fan chart from period-level predictions
+  // Build fan chart from period-level predictions, then trim to exact length.
   const p5 = [], p25 = [], p50 = [], p75 = [], p95 = []
   let cumP50 = 0
 
-  for (let k = 0; k < PERIODS; k++) {
+  for (let k = 0; k < numPeriods; k++) {
     const prev = cumP50
     cumP50 = (1 + cumP50) * (1 + periods[k].p50) - 1
 
@@ -203,5 +210,14 @@ export async function inferNBeats({ lastWindow, forecastDates }) {
     }
   }
 
-  return { dates: forecastDates, p5, p25, p50, p75, p95 }
+  // Trim trailing days from the final partial period so we return exactly
+  // forecastDates.length values (e.g. 63d horizon → 3 periods × 21d = 63).
+  return {
+    dates: forecastDates,
+    p5:  p5.slice(0, targetDays),
+    p25: p25.slice(0, targetDays),
+    p50: p50.slice(0, targetDays),
+    p75: p75.slice(0, targetDays),
+    p95: p95.slice(0, targetDays),
+  }
 }

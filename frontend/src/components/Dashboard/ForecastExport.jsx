@@ -188,7 +188,7 @@ ${weightNote}
 
 <div class="footer">
   <strong>Methodology.</strong> Snapshot horizons (5d / 21d / 63d) sit at or inside each model's training horizon:
-  XGBoost is capped at 21d (trained target), N-BEATS at 63d (three 21-day recursive periods). Factor / HMM / GP / LSTM simulate the full 12-month path.
+  XGBoost is capped at 21d (trained target). N-BEATS, Factor, HMM, GP and LSTM each cover the full 63-day forecast horizon natively.
   Ensemble uses regime-conditional stacked weights (Wolpert 1992; Ang &amp; Timmermann 2012).
   All base models use walk-forward out-of-sample validation (Lopez de Prado 2018).
 </div>
