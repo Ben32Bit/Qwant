@@ -1,11 +1,16 @@
 import React, { useMemo, useState, memo } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, Legend, ReferenceLine, ResponsiveContainer,
+  Tooltip, Legend, ReferenceLine, ReferenceArea, ResponsiveContainer,
 } from 'recharts'
 import { AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE, CHART_COLORS } from '../../utils/chartConfig.js'
 
 const METHOD_ORDER  = ['nbeats', 'timesfm', 'hmm', 'var', 'lstm']
+
+// Methods whose shadow OOS R² falls below this threshold are considered
+// actively harmful (≥50% worse than naive mean) and excluded from the chart.
+const OOS_R2_MIN = -0.5
 const METHOD_LABELS = { nbeats: 'N-BEATS', timesfm: 'TimesFM', hmm: 'HMM', var: 'GP', lstm: 'LSTM' }
 const METHOD_COLORS = { nbeats: '#ffd43b', timesfm: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757' }
 
@@ -33,6 +38,79 @@ function CompositeTooltip({ active, payload, label }) {
           </div>
         ))}
     </div>
+  )
+}
+
+// ── Shadow window info tooltip ────────────────────────────────────────────────
+
+function ShadowWindowInfo({ shadowStart, shadowEnd }) {
+  const [show, setShow] = useState(false)
+  const [pos,  setPos]  = useState({ top: 0, left: 0 })
+  const btnRef = React.useRef(null)
+
+  if (!shadowStart || !shadowEnd) return null
+
+  const handleShow = () => {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect()
+      setPos({ top: rect.bottom + 6, left: Math.max(8, rect.left - 120) })
+    }
+    setShow(true)
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1 ml-2">
+      <span className="mono" style={{ fontSize: 9, color: '#ffd43b', opacity: 0.7 }}>
+        Shadow {shadowStart?.slice(0, 7)} → {shadowEnd?.slice(0, 7)}
+      </span>
+      <button
+        ref={btnRef}
+        className="mono rounded-full flex items-center justify-center flex-shrink-0"
+        style={{
+          width: 14, height: 14,
+          background: 'rgba(255,212,59,0.15)',
+          color: '#ffd43b',
+          border: '1px solid rgba(255,212,59,0.4)',
+          cursor: 'pointer', fontSize: 9, lineHeight: 1,
+        }}
+        onMouseEnter={handleShow}
+        onMouseLeave={() => setShow(false)}
+        aria-label="Shadow holdout window explanation"
+      >
+        ?
+      </button>
+      {show && createPortal(
+        <div
+          className="rounded-lg border p-3"
+          style={{
+            position: 'fixed', top: pos.top, left: pos.left,
+            width: 300, zIndex: 9999,
+            background: 'var(--bg-secondary)', borderColor: 'rgba(255,212,59,0.4)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.6)', pointerEvents: 'none',
+          }}
+        >
+          <p className="mono font-bold text-xs mb-2" style={{ color: '#ffd43b' }}>
+            Shadow Holdout (OOS Test Window)
+          </p>
+          <p className="mono text-xs leading-relaxed mb-2" style={{ color: 'var(--text-secondary)' }}>
+            Each server-side model (HMM, GP, TimesFM) was trained on data up to{' '}
+            <span style={{ color: '#ffd43b' }}>{shadowStart}</span>, then made a
+            30-day forecast through{' '}
+            <span style={{ color: '#ffd43b' }}>{shadowEnd}</span>.
+          </p>
+          <p className="mono text-xs leading-relaxed mb-2" style={{ color: 'var(--text-secondary)' }}>
+            Because this window is now in the past, we can compare the model's
+            predictions (dashed lines) against what actually happened (blue Portfolio
+            line). The accuracy of this test is the <span style={{ color: 'var(--accent-green)' }}>OOS R²</span> shown
+            in the table above — it drives each model's ensemble weight.
+          </p>
+          <p className="mono" style={{ fontSize: 9, color: 'rgba(136,136,160,0.6)', borderTop: '1px solid var(--border)', paddingTop: 4 }}>
+            Lopez de Prado (2018) Advances in Financial Machine Learning, Ch. 7
+          </p>
+        </div>,
+        document.body
+      )}
+    </span>
   )
 }
 
@@ -119,6 +197,11 @@ function MethodEffectivenessTable({ results, ensemble }) {
               </span>
               {err && <span className="mono" style={{ fontSize: 8, color: '#ff4757' }}>error</span>}
               {!done && !err && <span className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)' }}>waiting…</span>}
+              {done && r2 != null && r2 < OOS_R2_MIN && (
+                <span className="mono" style={{ fontSize: 8, color: '#ff4757', background: 'rgba(255,71,87,0.1)', border: '1px solid rgba(255,71,87,0.25)', borderRadius: 3, padding: '0 3px' }}>
+                  excluded
+                </span>
+              )}
             </div>
             {/* Ensemble weight bar */}
             <div className="px-3 py-2">
@@ -161,7 +244,7 @@ function MethodEffectivenessTable({ results, ensemble }) {
       {Object.keys(weights).length > 0 && (
         <div className="px-3 py-1.5 flex items-center gap-1" style={{ borderTop: '1px solid var(--border)', background: 'rgba(74,158,255,0.04)' }}>
           <span className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)', opacity: 0.6 }}>
-            OOS R² from 30-day shadow holdout · Weights: regime-conditional stacked ensemble (Wolpert 1992)
+            OOS R² from 30-day shadow holdout · OOS R²-weighted ensemble (Wolpert 1992) · methods with OOS R² &lt; −0.5 excluded
           </span>
         </div>
       )}
@@ -320,12 +403,15 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, shadowStar
     <div className="rounded-lg border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
       <div className="mb-3">
         <div className="flex items-center justify-between">
-          <h3 className="mono font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
-            Composite Forecast
-            <span className="ml-2 font-normal text-xs" style={{ color: 'var(--text-secondary)' }}>
-              · projected portfolio value · next 3 months
-            </span>
-          </h3>
+          <div className="flex items-center flex-wrap gap-x-2">
+            <h3 className="mono font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
+              Composite Forecast
+              <span className="ml-2 font-normal text-xs" style={{ color: 'var(--text-secondary)' }}>
+                · cumulative % return · next 3 months
+              </span>
+            </h3>
+            <ShadowWindowInfo shadowStart={shadowStart} shadowEnd={shadowEnd} />
+          </div>
           <div className="flex items-center gap-2">
             <MethodStatusDots results={results} />
             {activeResults.length === 5 && (
@@ -357,22 +443,30 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, shadowStar
             tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`}
             width={50}
           />
-          {/* Shadow holdout window markers (T-60 and T-30) */}
-          {shadowStart && (
-            <ReferenceLine
-              x={shadowStart}
-              stroke="rgba(255,255,255,0.12)"
-              strokeDasharray="2 5"
+          {/* Shadow holdout window — amber shaded region with border lines */}
+          {shadowStart && shadowEnd && (
+            <ReferenceArea
+              x1={shadowStart}
+              x2={shadowEnd}
+              fill="rgba(255,212,59,0.06)"
+              stroke="rgba(255,212,59,0.25)"
               strokeWidth={1}
-              label={{ value: 'Shadow', position: 'insideTopLeft', fontSize: 8, fill: 'rgba(255,255,255,0.18)', fontFamily: 'monospace' }}
+              label={{
+                value: 'OOS Test Window',
+                position: 'insideTop',
+                fontSize: 8,
+                fill: 'rgba(255,212,59,0.55)',
+                fontFamily: 'monospace',
+              }}
             />
           )}
-          {shadowEnd && (
+          {shadowStart && !shadowEnd && (
             <ReferenceLine
-              x={shadowEnd}
-              stroke="rgba(255,255,255,0.12)"
-              strokeDasharray="2 5"
+              x={shadowStart}
+              stroke="rgba(255,212,59,0.4)"
+              strokeDasharray="3 4"
               strokeWidth={1}
+              label={{ value: 'Shadow start', position: 'insideTopLeft', fontSize: 8, fill: 'rgba(255,212,59,0.5)', fontFamily: 'monospace' }}
             />
           )}
           {forecastStart && (
@@ -390,21 +484,21 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, shadowStar
           />
 
           {/* Historical portfolio cumulative return — same blue used for the
-              Portfolio line in the Results tab so the forecast reads as a
-              continuation of the same series. */}
+              Portfolio line in the Results tab. connectNulls keeps it solid
+              through the shadow window even if downsampling skipped some dates. */}
           <Line
             type="monotone"
             dataKey="Portfolio"
-            name="Your Portfolio"
+            name="Your Portfolio (actual)"
             stroke={CHART_COLORS.portfolio}
-            strokeWidth={2}
+            strokeWidth={2.5}
             dot={false}
             isAnimationActive={false}
+            connectNulls
           />
 
-          {/* Shadow lines — dashed, low opacity, in the historical window.
-              Each server-side method's shadow p50 is plotted so users can
-              visually compare the model's holdout prediction vs actual. */}
+          {/* Shadow lines — shown even for excluded methods so the user can see
+              WHY they were excluded (the prediction vs actual gap is visible). */}
           {SHADOW_METHODS.map(method => {
             const r = (results ?? []).find(x => x.method === method)
             if (!r?.shadow_band) return null
@@ -426,10 +520,11 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, shadowStar
             )
           })}
 
-          {/* One median projection line per method */}
+          {/* One median projection line per method — skipped if OOS R² < threshold */}
           {METHOD_ORDER.map(method => {
             const r = (results ?? []).find(x => x.method === method)
             if (!r?.forecast) return null
+            if (r.oos_r2 != null && r.oos_r2 < OOS_R2_MIN) return null
             return (
               <Line
                 key={method}

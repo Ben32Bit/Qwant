@@ -153,24 +153,38 @@ def forecast_timesfm(
     ctx_tensor = torch.tensor(context).unsqueeze(0)     # shape: (1, ctx_len)
 
     with torch.no_grad():
+        # TimesFm2_5ModelForPrediction uses past_values= (not context=).
         try:
-            # Primary API (transformers >= 4.48): context + prediction_length + quantile_levels
             output = model(
-                context=ctx_tensor,
+                past_values=ctx_tensor,
                 prediction_length=horizon,
                 quantile_levels=_Q_LEVELS,
             )
-            q = output.quantile_forecasts[0].cpu().numpy()   # (horizon, 9)
-        except (TypeError, AttributeError):
-            # Fallback: older-style generate() without quantile_levels kwarg
-            output = model.generate(
-                past_values=ctx_tensor,
-                prediction_length=horizon,
+        except TypeError:
+            # Older build without quantile_levels kwarg
+            output = model(past_values=ctx_tensor, prediction_length=horizon)
+
+        # Output attribute name varies across transformers patch versions
+        raw = (getattr(output, "quantile_preds",     None)
+            or getattr(output, "quantile_forecasts", None)
+            or getattr(output, "prediction_outputs", None))
+
+        if raw is None:
+            attrs = [a for a in dir(output) if not a.startswith("_")]
+            raise RuntimeError(
+                f"TimesFM output format unrecognised — available attrs: {attrs}. "
+                "Upgrade transformers or open an issue."
             )
-            # Stitch a single point forecast into a mock 9-column array
-            arr = output.sequences[0].cpu().numpy() if hasattr(output, "sequences") \
-                  else output.cpu().numpy()
-            q   = np.tile(arr[:, None], (1, 9))             # (horizon, 9)
+
+        # Normalise to (horizon, n_quantiles) numpy array
+        arr = raw.cpu().numpy() if hasattr(raw, "cpu") else np.array(raw)
+        if arr.ndim == 3:
+            arr = arr[0]           # drop batch dim: (horizon, n_quantiles)
+        if arr.shape[-1] != len(_Q_LEVELS):
+            # No quantile output — replicate point forecast into 9 columns
+            arr = np.tile(arr[:, None] if arr.ndim == 1 else arr[:, :1],
+                          (1, len(_Q_LEVELS)))
+        q = arr                    # (horizon, 9)
 
     # ── Convert absolute levels → cumulative % return ────────────────────────
     # context ends at 1.0, so predicted level l → return (l - 1) × 100

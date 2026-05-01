@@ -2,6 +2,74 @@
 
 ---
 
+## 2026-05-01 — LSTM R² + OOS exclusion threshold
+
+### What changed
+
+1. **LSTM IS R² and OOS R² — full pipeline** 
+   - **Server** (`forecast_engine.py` / `prepare_lstm_features`): exports `is_eval_windows` (30 × 60×5 feature matrices), `is_eval_targets` (actual z_ret values for 1-step-ahead accuracy), and `shadow` dict (`last_window`, `sigma_21d`, `raw_return_seed`, `actual_cumrets`) in `lstm_features`
+   - **Browser** (`LSTMInferer.js`): added `computeR2()` and `batchPredict()` helpers. After the main 200-pass forecast rollout:
+     - IS R²: runs model on the 30 IS eval windows (1 pass, no dropout), compares predicted z_ret to actual z_ret — all in the same clipped [-1, 1] space, no sigma unscaling needed
+     - OOS R²: runs a nested `inferLSTM` call on the shadow seed window (100 passes for speed), compares p50 cumulative % to `shadow.actual_cumrets`, computes R² = 1 − SS_res/SS_tot
+     - Returns `{ ..., is_r2, oos_r2 }` from `inferLSTM`
+   - **Hook** (`useForecast.js`): passes `isEvalWindows`, `isEvalTargets`, `shadow` to `inferLSTM`; attaches `band.oos_r2` to `result.oos_r2` and `band.is_r2` to `result.metadata.is_r2`
+
+2. **OOS R² exclusion threshold = −0.5**
+   - Methods with OOS R² < −0.5 are considered actively harmful (errors ≥50% larger than naive mean)
+   - `ForecastMethodCard`: shows "Forecast excluded — OOS R² too low" message instead of fan chart; fan chart and details strip are hidden
+   - `ForecastComposite`: skips rendering the forward projection line for excluded methods; shadow lines still shown so user can see why (bad prediction vs actual gap); table shows "excluded" badge on the row; footnote updated
+   - Threshold constant `OOS_R2_MIN = -0.5` in both files
+
+### Files affected
+- `backend/app/services/forecast_engine.py`
+- `frontend/src/ml/LSTMInferer.js`
+- `frontend/src/hooks/useForecast.js`
+- `frontend/src/components/Dashboard/ForecastComposite.jsx`
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx`
+
+---
+
+## 2026-05-01 — Forecast UI fixes: TimesFM, shadow window, % cards, references
+
+### What changed
+
+Four targeted fixes following user review of the live forecast panel:
+
+1. **TimesFM 2.5 crash fixed** (`backend/app/services/timesfm_provider.py`)
+   - Error: `'TimesFm2_5ModelForPrediction' object has no attribute 'generate'`
+   - Root cause: primary call used `context=` kwarg (wrong); on TypeError it fell back to `.generate()` which also doesn't exist
+   - Fix: use `past_values=` (correct HuggingFace convention); probe output for `quantile_preds` / `quantile_forecasts` / `prediction_outputs` across transformers versions; removed broken `.generate()` fallback
+   - Output shape normalised: handles (batch, horizon, q) and (horizon, q)
+
+2. **regime.py stale import fixed** (`backend/app/models/regime.py`)
+   - `get_ensemble_weights` was deleted in PR-4 but still imported — caused ImportError on `/api/regime/current`
+   - Removed import and call; endpoint now returns regime probs only (weights are OOS R²-based, computed at forecast time)
+
+3. **Shadow window more obvious** (`frontend/src/components/Dashboard/ForecastComposite.jsx`)
+   - Added `ReferenceArea` (amber, 6% fill) spanning shadowStart → shadowEnd instead of two faint lines
+   - Added `ShadowWindowInfo` tooltip button: hover explains OOS test window, what shadow lines vs Portfolio line mean, and OOS R² connection
+   - Portfolio line: increased strokeWidth 2→2.5, added `connectNulls` to ensure continuity through shadow window
+   - Fixed stale ensemble footnote: "regime-conditional" → "OOS R²-weighted"
+
+4. **Individual method cards in % return** (`frontend/src/components/Dashboard/ForecastMethodCard.jsx`)
+   - `buildChartData` no longer converts to dollar values; uses raw cumulative % directly
+   - Y-axis formatter: `fmtDollar` → `+X.X%`; `FanTooltip` shows `+X.XX%`
+   - Removed the per-card citation footer block (citations remain accessible via `?` info tooltip on hover)
+
+5. **Consolidated references section** (`frontend/src/components/Dashboard/ForecastPanel.jsx`)
+   - Added collapsible `ForecastReferences` component at bottom (below hasData gate)
+   - Organised into three sections: Forecast Methods · Ensemble & Uncertainty · Validation & Position Sizing
+   - Replaces the old thin methodology footer; expanded coverage matches all 5 model citation sets
+
+### Files affected
+- `backend/app/services/timesfm_provider.py`
+- `backend/app/models/regime.py`
+- `frontend/src/components/Dashboard/ForecastComposite.jsx`
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx`
+- `frontend/src/components/Dashboard/ForecastPanel.jsx`
+
+---
+
 ## 2026-05-01 — PR-7 complete: Dead-code sweep + critical crash fix
 
 ### What changed

@@ -51,7 +51,7 @@ async def get_current_regime(req: RegimeRequest, request: Request):
         import numpy as np
         from app.services.forecast_engine import _equity_to_returns, forecast_hmm
         from app.services.vix_provider     import get_vix_features
-        from app.services.meta_learner     import compute_regime_probs, get_ensemble_weights
+        from app.services.meta_learner     import compute_regime_probs
 
         end_date = req.end_date or req.equity_curve[-1]["date"]
         returns  = _equity_to_returns(req.equity_curve)
@@ -68,13 +68,9 @@ async def get_current_regime(req: RegimeRequest, request: Request):
         regime_probs = compute_regime_probs(hmm_meta, vix_pct_rank)
         dominant     = regime_probs.get("dominant", "bull_low_vol")
 
-        # Ensemble weights
-        weights = get_ensemble_weights(regime_probs)
-
         return {
             "regime_probabilities": {k: v for k, v in regime_probs.items() if k != "dominant"},
             "dominant_regime":      dominant,
-            "ensemble_weights":     weights,
             "hmm_metadata":         hmm_meta,
             "vix_pct_rank":         round(vix_pct_rank, 3),
             "compute_ms":           int((time.time() - t0) * 1000),

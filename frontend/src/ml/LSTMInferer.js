@@ -145,6 +145,42 @@ function buildZFeatureRow(rawReturns, sigma63Hist) {
   return [zRet, volPct, zMom5, zMom21, rsiCent]
 }
 
+// ── R² helpers ────────────────────────────────────────────────────────────────
+
+function computeR2(actual, predicted) {
+  const n = Math.min(actual.length, predicted.length)
+  if (n < 5) return null
+  const mean = actual.slice(0, n).reduce((s, v) => s + v, 0) / n
+  let ssTot = 0, ssRes = 0
+  for (let i = 0; i < n; i++) {
+    ssTot += (actual[i] - mean) ** 2
+    ssRes += (actual[i] - predicted[i]) ** 2
+  }
+  return ssTot > 1e-12 ? +((1 - ssRes / ssTot).toFixed(4)) : null
+}
+
+/**
+ * Run the model on a batch of (60×5) windows (1 pass, no dropout).
+ * Returns raw model outputs in [-1, 1].
+ */
+async function batchPredict(model, tf, windows) {
+  const n        = windows.length
+  const lookback = windows[0].length
+  const nFeat    = windows[0][0].length
+  const flat     = new Float32Array(n * lookback * nFeat)
+  for (let i = 0; i < n; i++) {
+    const base = i * lookback * nFeat
+    for (let r = 0; r < lookback; r++)
+      for (let f = 0; f < nFeat; f++)
+        flat[base + r * nFeat + f] = windows[i][r][f]
+  }
+  const t = tf.tensor3d(flat, [n, lookback, nFeat])
+  const p = model.apply(t, { training: false })
+  const data = await p.data()
+  t.dispose(); p.dispose()
+  return Array.from(data)
+}
+
 /**
  * Run Attention-LSTM MC Dropout inference.
  *
@@ -155,6 +191,10 @@ function buildZFeatureRow(rawReturns, sigma63Hist) {
  * @param {number}     params.currentSigma21d   — current σ_21d (for unscaling z-preds)
  * @param {number[]}   [params.sigma63History]  — trailing 5y σ_63 distribution for vol_pct rank
  * @param {number}     [params.nPasses=200]
+ * @param {number[][]} [params.isEvalWindows]   — 30 historical (60×5) windows for IS R²
+ * @param {number[]}   [params.isEvalTargets]   — actual z_ret for each eval window ([-1, 1])
+ * @param {Object}     [params.shadow]          — shadow holdout {last_window, sigma_21d,
+ *                                                raw_return_seed, actual_cumrets}
  */
 export async function inferLSTM({
   seedWindow,
@@ -163,6 +203,9 @@ export async function inferLSTM({
   currentSigma21d,
   sigma63History = null,
   nPasses = N_MC_PASSES,
+  isEvalWindows = null,
+  isEvalTargets = null,
+  shadow = null,
 }) {
   // ── Input contract validation ───────────────────────────────────────────────
   if (!Array.isArray(seedWindow) || !seedWindow.length)
@@ -279,7 +322,42 @@ export async function inferLSTM({
     )
   }
 
-  return { dates: forecastDates, p5, p25, p50, p75, p95 }
+  // ── IS R²: 1-step-ahead accuracy on held-out historical windows ────────────
+  // Model predicts z_ret ∈ [-1, 1]; targets are actual z_ret (same scale).
+  let isR2 = null
+  if (isEvalWindows?.length && isEvalTargets?.length) {
+    try {
+      const preds = await batchPredict(model, tf, isEvalWindows)
+      isR2 = computeR2(isEvalTargets, preds)
+    } catch { /* non-fatal */ }
+  }
+
+  // ── OOS R²: shadow holdout — run LSTM on shadow seed, compare to actual ────
+  // Shadow window = [T-60, T-30]: we have the 60×5 seed window at T-60, and
+  // the actual cumulative % returns for the next 30 days. Run a single MC pass
+  // (200 paths) from the shadow seed and compare p50 to actual_cumrets.
+  let oosR2 = null
+  if (shadow?.last_window && shadow?.actual_cumrets?.length >= 5) {
+    try {
+      const sSigma63 = Array.isArray(sigma63History) && sigma63History.length > 0
+        ? sigma63History
+        : buildSigma63History(shadow.raw_return_seed ?? rawReturnSeed)
+      const shadowInference = await inferLSTM({
+        seedWindow:      shadow.last_window,
+        forecastDates:   Array.from({ length: shadow.actual_cumrets.length }, (_, i) => `s${i}`),
+        rawReturnSeed:   shadow.raw_return_seed ?? rawReturnSeed,
+        currentSigma21d: shadow.sigma_21d ?? currentSigma21d,
+        sigma63History:  sSigma63,
+        nPasses:         100,   // fewer passes for speed
+        isEvalWindows:   null,
+        isEvalTargets:   null,
+        shadow:          null,  // no nested shadow
+      })
+      oosR2 = computeR2(shadow.actual_cumrets, shadowInference.p50)
+    } catch { /* non-fatal — shadow OOS R² is optional */ }
+  }
+
+  return { dates: forecastDates, p5, p25, p50, p75, p95, is_r2: isR2, oos_r2: oosR2 }
 }
 
 /**

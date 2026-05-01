@@ -688,6 +688,41 @@ def prepare_lstm_features(
     sigma_63_series = sigma_63.dropna().iloc[-(5 * TRADING_DAYS):].astype(float)
     sigma_63_history = sigma_63_series.tolist()
 
+    # ── IS R² evaluation: last 30 one-step-ahead windows ────────────────────
+    # The browser runs the model on each window (1 pass, no dropout) and
+    # compares the predicted z_ret to the actual z_ret target.
+    # Both live in the same clipped space ([-1, 1]), so no unscaling needed.
+    IS_EVAL_N = 30
+    is_eval_windows = []
+    is_eval_targets = []
+    for i in range(IS_EVAL_N, 0, -1):
+        end_idx = len(df) - i
+        if end_idx >= LOOKBACK and end_idx < len(df):
+            is_eval_windows.append(
+                df[feat_cols].values[end_idx - LOOKBACK:end_idx].astype(float).tolist()
+            )
+            is_eval_targets.append(float(df["z_ret"].iloc[end_idx]))  # clipped [-1, 1]
+
+    # ── Shadow seed: features + actuals for browser OOS R² ───────────────────
+    # Shadow window = [T - SHADOW_DAYS, T - SHADOW_DAYS + SHADOW_HORIZON].
+    # We send the 60×5 seed window and actual cumulative returns so the browser
+    # can run a forward pass and compute OOS R² without any server-side LSTM.
+    _SHADOW_DAYS    = 60   # must match SHADOW_DAYS in run_all_forecasts
+    _SHADOW_HORIZON = 30   # must match SHADOW_HORIZON in run_all_forecasts
+    shadow_cut = len(df) - _SHADOW_DAYS
+    shadow_info: dict = {}
+    if shadow_cut >= LOOKBACK and shadow_cut + _SHADOW_HORIZON <= len(r):
+        s21 = float(r.iloc[shadow_cut - 21:shadow_cut].std())
+        if not np.isfinite(s21) or s21 <= 0:
+            s21 = 0.015
+        shadow_rets = r.iloc[shadow_cut: shadow_cut + _SHADOW_HORIZON]
+        shadow_info = {
+            "last_window":   df[feat_cols].values[shadow_cut - LOOKBACK:shadow_cut].astype(float).tolist(),
+            "sigma_21d":     s21,
+            "raw_return_seed": r.iloc[max(0, shadow_cut - 128):shadow_cut].astype(float).tolist(),
+            "actual_cumrets":  ((1 + shadow_rets).cumprod() - 1).mul(100).tolist(),
+        }
+
     return {
         "last_window":        last_window,
         "feature_names":      feat_cols,
@@ -696,6 +731,9 @@ def prepare_lstm_features(
         "current_sigma_21d":  current_sigma_21d,
         "sigma_63_history":   sigma_63_history,
         "clip_sigmas":        CLIP_SIGMAS,
+        "is_eval_windows":    is_eval_windows,
+        "is_eval_targets":    is_eval_targets,
+        "shadow":             shadow_info or None,
     }
 
 

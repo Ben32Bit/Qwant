@@ -136,6 +136,85 @@ function EtaBar({ loading, p1StartRef, nbeatsStartRef, p2StartRef, lstmStartRef 
   )
 }
 
+// ── Consolidated references ───────────────────────────────────────────────────
+
+const REFERENCES = [
+  {
+    section: 'Forecast Methods',
+    items: [
+      'Oreshkin, B. et al. (2020). N-BEATS: Neural Basis Expansion Analysis for Interpretable Time Series Forecasting. ICLR 2020. arxiv.org/abs/1905.10437',
+      'Hamilton, J.D. (1989). A new approach to the economic analysis of nonstationary time series and the business cycle. Econometrica, 57(2), 357–384.',
+      'Ang, A. & Bekaert, G. (2002). International asset allocation with regime shifts. Review of Financial Studies, 15(4), 1137–1187.',
+      'Rasmussen, C.E. & Williams, C.K.I. (2006). Gaussian Processes for Machine Learning. MIT Press. gaussianprocess.org/gpml/',
+      'Matérn, B. (1960). Spatial Variation. [ν=5/2 kernel]. Meddelanden från Statens Skogsforskningsinstitut, 49(5).',
+      'Bahdanau, D., Cho, K. & Bengio, Y. (2015). Neural machine translation by jointly learning to align and translate. ICLR 2015. arxiv.org/abs/1409.0473',
+      'Gal, Y. & Ghahramani, Z. (2016). Dropout as a Bayesian approximation. ICML 33, 1050–1059.',
+      'Fischer, T. & Krauss, C. (2018). Deep learning with LSTM for financial market predictions. EJOR, 270(2), 654–669.',
+      'Das, A. et al. (2024). A decoder-only foundation model for time-series forecasting. ICML 2024. arxiv.org/abs/2310.10688',
+    ],
+  },
+  {
+    section: 'Ensemble & Uncertainty',
+    items: [
+      'Wolpert, D.H. (1992). Stacked generalization. Neural Networks, 5(2), 241–259.',
+      'Krogh, A. & Vedelsby, J. (1995). Neural Network Ensembles, Cross Validation, and Active Learning. NeurIPS 8, 231–238.',
+      'Lakshminarayanan, B. et al. (2017). Simple and Scalable Predictive Uncertainty Estimation Using Deep Ensembles. NeurIPS 30.',
+      'Koenker, R. & Bassett, G. (1978). Regression Quantiles. Econometrica, 46(1), 33–50.',
+    ],
+  },
+  {
+    section: 'Validation & Position Sizing',
+    items: [
+      'Lopez de Prado, M. (2018). Advances in Financial Machine Learning, Ch. 7 (Purged Walk-Forward CV). doi:10.1002/9781119482161',
+      'Bailey, D.H. & Lopez de Prado, M. (2014). The Deflated Sharpe Ratio. Journal of Portfolio Management, 40(5), 94–107.',
+      'Kelly, J.L. (1956). A new interpretation of information rate. Bell System Technical Journal, 35(4), 917–926.',
+      'Ang, A., Hodrick, R.J., Xing, Y. & Zhang, X. (2006). The cross-section of volatility and expected returns. Journal of Finance, 61(1), 259–299.',
+    ],
+  },
+]
+
+function ForecastReferences() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="rounded-lg border overflow-hidden"
+      style={{ borderColor: 'var(--border)', background: 'var(--bg-card)' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 text-left"
+        style={{ background: 'transparent', cursor: 'pointer', border: 'none' }}
+      >
+        <span className="mono font-bold text-xs" style={{ color: 'var(--text-secondary)' }}>
+          📄 References &amp; Methodology
+        </span>
+        <span className="mono text-xs" style={{ color: 'var(--text-secondary)' }}>
+          {open ? '▲ collapse' : '▼ expand'}
+        </span>
+      </button>
+      {open && (
+        <div className="px-4 pb-4 space-y-3">
+          <p className="mono text-xs leading-relaxed" style={{ color: 'var(--text-secondary)', opacity: 0.8 }}>
+            All methods use walk-forward (expanding-window) OOS validation — random k-fold is never applied,
+            as it leaks future data in time-series settings. The shadow holdout window (T−60 → T−30)
+            provides the OOS R² that drives ensemble weighting.
+          </p>
+          {REFERENCES.map(({ section, items }) => (
+            <div key={section}>
+              <p className="mono font-bold" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.5, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                {section}
+              </p>
+              {items.map((c, i) => (
+                <p key={i} className="mono leading-relaxed" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.65, marginBottom: 2 }}>
+                  📄 {c}
+                </p>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export default function ForecastPanel({ backtest, portfolio, forecast }) {
@@ -400,29 +479,8 @@ export default function ForecastPanel({ backtest, portfolio, forecast }) {
           </div>
         )}
 
-        {/* OOS methodology footer */}
-        {hasData && (
-          <div className="rounded-lg border px-4 py-3"
-            style={{ borderColor: 'var(--border)', background: 'var(--bg-card)' }}>
-            <p className="mono text-xs font-bold mb-1" style={{ color: 'var(--text-secondary)' }}>
-              Out-of-Sample Methodology
-            </p>
-            <p className="mono text-xs leading-relaxed" style={{ color: 'var(--text-secondary)', opacity: 0.8 }}>
-              All methods use walk-forward (expanding-window) train/test splits. Random k-fold is never
-              applied — it violates temporal ordering and leaks future data. Each method reports an
-              out-of-sample validation diagnostic (Ljung-Box, OOS R², regime sanity check, Attention-LSTM OOS MSE).
-            </p>
-            <p className="mono text-xs mt-2 leading-relaxed" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
-              📄 Lopez de Prado, M. (2018). Advances in Financial Machine Learning, Ch. 7.
-              https://doi.org/10.1002/9781119482161 ·
-              Bailey, D.H. & Lopez de Prado, M. (2014). The Deflated Sharpe Ratio.
-              Journal of Portfolio Management, 40(5), 94–107.
-              https://doi.org/10.3905/jpm.2014.40.5.094 ·
-              CS230 Stanford (2020). Temporal Attention-Enhanced LSTM.
-              https://cs230.stanford.edu/projects_winter_2020/reports/32066186.pdf
-            </p>
-          </div>
-        )}
+        {/* Consolidated references — collapsible */}
+        {hasData && <ForecastReferences />}
 
       </div>
     </div>

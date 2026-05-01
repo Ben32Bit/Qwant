@@ -193,6 +193,9 @@ export function useForecast(backtest, portfolio) {
         rawReturnSeed:   lstmFeatures.raw_return_seed,
         currentSigma21d: lstmFeatures.current_sigma_21d,
         sigma63History:  lstmFeatures.sigma_63_history,
+        isEvalWindows:   lstmFeatures.is_eval_windows  ?? null,
+        isEvalTargets:   lstmFeatures.is_eval_targets  ?? null,
+        shadow:          lstmFeatures.shadow            ?? null,
       })
       const lstmMs = Date.now() - (lstmStart.current ?? Date.now())
       setTiming(t => ({ ...t, lstmMs }))
@@ -202,11 +205,13 @@ export function useForecast(backtest, portfolio) {
           ...r,
           forecast:   band,
           compute_ms: lstmMs,
+          oos_r2:     band.oos_r2 ?? null,
           metadata: {
             architecture:   r.metadata.architecture,
             attention:      r.metadata.attention,
             dropout_passes: 200,
             client_side:    false,
+            is_r2:          band.is_r2  ?? null,
           },
         }),
       } : p2)

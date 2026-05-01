@@ -6,6 +6,10 @@ import {
 } from 'recharts'
 import { AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE } from '../../utils/chartConfig.js'
 
+// Methods whose shadow OOS R² falls below this threshold are excluded from the
+// composite chart and shown with a warning instead of a fan chart.
+const OOS_R2_MIN = -0.5
+
 // ── Paper citations — matched to FamaFrenchFactors.jsx format ─────────────────
 
 const CITATIONS = {
@@ -112,15 +116,6 @@ function InfoTooltip({ content, citations }) {
   )
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function fmtDollar(v) {
-  if (v == null) return '—'
-  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`
-  if (v >= 1_000)     return `$${(v / 1_000).toFixed(1)}k`
-  return `$${v.toFixed(0)}`
-}
-
 // ── Fan chart tooltip ─────────────────────────────────────────────────────────
 
 function FanTooltip({ active, payload, label, color }) {
@@ -131,7 +126,7 @@ function FanTooltip({ active, payload, label, color }) {
       <div className="mono text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>{label}</div>
       {p50 != null && (
         <div className="mono text-sm" style={{ color }}>
-          median: {fmtDollar(p50)}
+          median: {p50 >= 0 ? '+' : ''}{p50.toFixed(2)}%
         </div>
       )}
     </div>
@@ -139,28 +134,19 @@ function FanTooltip({ active, payload, label, color }) {
 }
 
 // ── Build Recharts-compatible data from forecast band ─────────────────────────
-// Converts cumulative-% forecast bands to actual portfolio dollar values.
-// Uses stackId trick: transparent base area + coloured range area.
+// Uses the raw cumulative-% values directly (p50[i] = cumulative % from forecast
+// start). stackId trick: transparent base area + coloured range area.
 
-function buildChartData(band, lastValue) {
-  if (!band?.dates || !lastValue) return []
-  const toVal = pct => lastValue * (1 + pct / 100)
-  return band.dates.map((date, i) => {
-    const p5  = toVal(band.p5[i])
-    const p95 = toVal(band.p95[i])
-    const p25 = toVal(band.p25[i])
-    const p75 = toVal(band.p75[i])
-    return {
-      date,
-      // Outer band (p5 → p95)
-      outer_base:   p5,
-      outer_height: p95 - p5,
-      // Inner band (p25 → p75)
-      inner_base:   p25,
-      inner_height: p75 - p25,
-      p50:          toVal(band.p50[i]),
-    }
-  })
+function buildChartData(band) {
+  if (!band?.dates) return []
+  return band.dates.map((date, i) => ({
+    date,
+    outer_base:   band.p5[i],
+    outer_height: band.p95[i] - band.p5[i],
+    inner_base:   band.p25[i],
+    inner_height: band.p75[i] - band.p25[i],
+    p50:          band.p50[i],
+  }))
 }
 
 // ── Metadata strip ────────────────────────────────────────────────────────────
@@ -293,7 +279,7 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
   const citations = CITATIONS[method] ?? []
   const desc      = METHOD_DESC[method] ?? ''
 
-  const chartData = useMemo(() => buildChartData(forecast, lastValue), [forecast, lastValue])
+  const chartData = useMemo(() => buildChartData(forecast), [forecast])
 
   const tickCount = 4
   const tickDates = chartData.length
@@ -362,8 +348,23 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
         </div>
       )}
 
-      {/* Fan chart */}
-      {forecast && chartData.length > 0 && (
+      {/* Excluded state — OOS R² too low */}
+      {forecast && oos_r2 != null && oos_r2 < OOS_R2_MIN && (
+        <div className="rounded px-3 py-2 mono mt-2"
+          style={{ background: 'rgba(255,71,87,0.06)', border: '1px solid rgba(255,71,87,0.25)' }}>
+          <div className="text-xs font-bold mb-1" style={{ color: '#ff4757' }}>
+            Forecast excluded — OOS R² too low
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            This model scored OOS R² = {oos_r2 >= 0 ? '+' : ''}{oos_r2.toFixed(2)} on the shadow holdout window,
+            meaning its errors were {Math.abs(oos_r2 * 100).toFixed(0)}% larger than simply predicting
+            the historical mean. Including it in the ensemble would reduce forecast quality.
+          </div>
+        </div>
+      )}
+
+      {/* Fan chart — hidden for excluded methods */}
+      {forecast && (oos_r2 == null || oos_r2 >= OOS_R2_MIN) && chartData.length > 0 && (
         <ResponsiveContainer width="100%" height={180}>
           <ComposedChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 2 }}>
             <CartesianGrid {...GRID_STYLE} />
@@ -379,10 +380,10 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
               tick={{ ...AXIS_STYLE.tick, fontSize: 9 }}
               axisLine={AXIS_STYLE.axisLine}
               tickLine={AXIS_STYLE.tickLine}
-              tickFormatter={fmtDollar}
-              width={50}
+              tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
+              width={46}
             />
-            <ReferenceLine y={0} stroke="var(--border)" strokeWidth={1} />
+            <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeWidth={1} />
             <Tooltip content={<FanTooltip color={color} />} />
 
             {/* Outer band p5→p95 */}
@@ -400,7 +401,7 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
       )}
 
       {/* Collapsible detail strip */}
-      {forecast && (
+      {forecast && (oos_r2 == null || oos_r2 >= OOS_R2_MIN) && (
         <div>
           <button
             onClick={() => setShowDetails(d => !d)}
@@ -413,14 +414,6 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
         </div>
       )}
 
-      {/* Citation footer — matches FamaFrenchFactors.jsx */}
-      <div className="mt-3 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
-        {citations.map((c, i) => (
-          <p key={i} className="mono text-xs leading-relaxed" style={{ color: 'var(--text-secondary)', fontSize: 10 }}>
-            📄 {c}
-          </p>
-        ))}
-      </div>
     </div>
   )
 }
