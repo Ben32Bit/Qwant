@@ -348,23 +348,23 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
         </div>
       )}
 
-      {/* Excluded state — OOS R² too low */}
+      {/* Low OOS R² warning — chart still rendered below */}
       {forecast && oos_r2 != null && oos_r2 < OOS_R2_MIN && (
         <div className="rounded px-3 py-2 mono mt-2"
-          style={{ background: 'rgba(255,71,87,0.06)', border: '1px solid rgba(255,71,87,0.25)' }}>
-          <div className="text-xs font-bold mb-1" style={{ color: '#ff4757' }}>
-            Forecast excluded — OOS R² too low
+          style={{ background: 'rgba(255,212,59,0.06)', border: '1px solid rgba(255,212,59,0.25)' }}>
+          <div className="text-xs font-bold mb-1" style={{ color: '#ffd43b' }}>
+            Low OOS R² — interpret with caution
           </div>
           <div style={{ fontSize: 10, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
             This model scored OOS R² = {oos_r2 >= 0 ? '+' : ''}{oos_r2.toFixed(2)} on the shadow holdout window,
             meaning its errors were {Math.abs(oos_r2 * 100).toFixed(0)}% larger than simply predicting
-            the historical mean. Including it in the ensemble would reduce forecast quality.
+            the historical mean. Excluded from the composite ensemble — shown here for transparency.
           </div>
         </div>
       )}
 
-      {/* Fan chart — hidden for excluded methods */}
-      {forecast && (oos_r2 == null || oos_r2 >= OOS_R2_MIN) && chartData.length > 0 && (
+      {/* Fan chart — always shown when a forecast exists */}
+      {forecast && chartData.length > 0 && (
         <ResponsiveContainer width="100%" height={180}>
           <ComposedChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 2 }}>
             <CartesianGrid {...GRID_STYLE} />
@@ -401,7 +401,7 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
       )}
 
       {/* Collapsible detail strip */}
-      {forecast && (oos_r2 == null || oos_r2 >= OOS_R2_MIN) && (
+      {forecast && (
         <div>
           <button
             onClick={() => setShowDetails(d => !d)}

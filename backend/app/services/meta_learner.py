@@ -4,8 +4,7 @@ MetaLearner — OOS R²-Weighted Ensemble of Base Forecast Models.
 Architecture (Stacked Generalization — Wolpert 1992)
 ----------------------------------------------------
 Layer 0: 5 base models (N-BEATS, HMM, GP, LSTM, TimesFM 2.5)
-Layer 1: Ensemble weights proportional to OOS R² on a 30-day shadow holdout,
-         with a 30% floor for TimesFM (zero-shot foundation model stability).
+Layer 1: Ensemble weights proportional to OOS R² on a 30-day shadow holdout.
 
          Negative OOS R² is clipped to 0 (a model worse than the naive mean
          contributes nothing). If all methods have zero R², equal weight is
@@ -114,16 +113,11 @@ def get_ensemble_weights_from_oos_r2(
     """
     Weight ensemble methods proportional to their OOS R² on the shadow holdout.
 
-    TimesFM gets a 30% floor (zero-shot foundation model stability — its R² can
-    vary wildly on short windows without warranting a low allocation).
-
     Algorithm
     ---------
     1. Clip negative R² to 0 — a model worse than the naive mean contributes nothing.
     2. Normalize clipped values to sum to 1.
-    3. Apply TimesFM 30% floor: if timesfm weight < 0.30, redistribute the
-       deficit proportionally from the other methods.
-    4. Fallback to equal weight when all clipped R²s are 0.
+    3. Fallback to equal weight when all clipped R²s are 0.
 
     Parameters
     ----------
@@ -133,8 +127,6 @@ def get_ensemble_weights_from_oos_r2(
     -------
     dict: {method: weight} — weights sum to 1.0 over all included methods
     """
-    TFM_FLOOR = 0.30
-
     clipped = {m: max(0.0, r2 or 0.0) for m, r2 in method_r2s.items()}
     total   = sum(clipped.values())
 
@@ -142,20 +134,7 @@ def get_ensemble_weights_from_oos_r2(
         n = len(method_r2s)
         return {m: round(1.0 / n, 4) if n > 0 else 0.0 for m in method_r2s}
 
-    weights = {m: w / total for m, w in clipped.items()}
-
-    # TimesFM floor
-    if "timesfm" in weights and weights["timesfm"] < TFM_FLOOR:
-        deficit = TFM_FLOOR - weights["timesfm"]
-        weights["timesfm"] = TFM_FLOOR
-        others       = {m: w for m, w in weights.items() if m != "timesfm"}
-        other_total  = sum(others.values())
-        if other_total > 0:
-            scale = (1.0 - TFM_FLOOR) / other_total
-            for m in others:
-                weights[m] = others[m] * scale
-
-    return {m: round(w, 4) for m, w in weights.items()}
+    return {m: round(w / total, 4) for m, w in clipped.items()}
 
 
 def compute_disagreement(method_p50s: dict[str, list[float]], horizon_idx: int = 20) -> dict:
