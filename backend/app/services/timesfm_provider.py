@@ -99,24 +99,24 @@ def forecast_timesfm(
     """
     Zero-shot probabilistic forecast via TimesFM 2.5 (200M parameters).
 
-    Pipeline (standard quant log-price framing):
+    Pipeline (raw equity-curve framing, linear return conversion):
       1. Build cumulative equity curve  L_t = ∏(1 + r_s) for s ≤ t
-      2. Take log: ℓ_t = log L_t  (random-walk-with-drift target)
-      3. Feed the last CONTEXT_LEN log-prices to TimesFM as past_values
-      4. Model returns predicted log-prices  ℓ̂_{t+1..t+H}
-      5. Cumulative simple-return path: cum_ret_h = exp(ℓ̂_{T+h} − ℓ_T) − 1
-      6. Fan bands: synthesised as exp(ℓ̂ + z_q · σ_logret · √t) − 1, where
-         σ_logret is the trailing 252-day realised log-return vol
+      2. Feed the last CONTEXT_LEN level values to TimesFM as past_values
+         (no normalisation — TimesFM has internal scaling)
+      3. Model returns predicted future levels  L̂_{T+1..T+H}
+      4. Cumulative simple-return path: cum_ret_h = (L̂_{T+h} − L_T) / L_T
+      5. Fan bands: synthesised in cum-return space as p50 ± z_q · σ · √t,
+         where σ is the trailing 252-day realised daily-return vol
 
-    Why log-prices, not normalised levels or raw returns:
-      * TimesFM is trained on diverse mostly-non-financial level series with
-        internal scaling — feeding raw cumulative levels matches that shape.
-      * Log-prices are the standard quant target for random-walk-with-drift
-        models; their increments (log-returns) are stationary.
-      * Pre-normalising the level series to end at 1.0 fights the model's
-        internal scaling and biases it toward generic mean-of-history
-        forecasts (the previous behaviour, which scored OOS R² ≈ −100 on
-        flat windows).
+    Why raw levels and linear conversion:
+      * TimesFM is trained on diverse level series with internal scaling —
+        feeding the raw equity curve matches that training shape.
+      * Pre-normalising the curve to end at 1.0 fights the model's internal
+        scaling and biases it toward mean-of-history forecasts.
+      * Log-price framing + exp() conversion is theoretically clean but
+        amplifies any model output noise exponentially — small drifts at
+        the tail blow up into multi-thousand-percent spikes. Linear
+        conversion is bounded and well-behaved.
 
     Returns
     -------
@@ -148,16 +148,16 @@ def forecast_timesfm(
 
     t0 = time.time()
 
-    # ── Build log-price series ──────────────────────────────────────────────
-    # Cumulative equity curve, then natural log. log-prices are the canonical
-    # random-walk-with-drift target in quant: their first differences are
-    # log-returns, which are (near-)stationary. No further normalisation —
-    # TimesFM has its own internal scaling and pre-normalising fights it.
-    levels      = (1.0 + returns).cumprod()                       # equity curve
-    log_levels  = np.log(levels.values).astype(np.float32)        # ℓ_t = log L_t
-    context     = log_levels[-CONTEXT_LEN:]
-    last_log    = float(log_levels[-1])                           # ℓ_T (anchor)
-    ctx_len     = len(context)
+    # ── Build raw equity curve ──────────────────────────────────────────────
+    # Cumulative product of (1 + daily returns), no normalisation. TimesFM
+    # has internal scaling and handles arbitrary level magnitudes; pre-
+    # normalising fights it. Linear conversion at the end keeps the output
+    # bounded (no exp() blowup on noisy model predictions).
+    levels   = (1.0 + returns).cumprod()                          # equity curve
+    arr_lvl  = levels.values.astype(np.float32)
+    context  = arr_lvl[-CONTEXT_LEN:]
+    last_lvl = float(arr_lvl[-1])                                 # L_T (anchor)
+    ctx_len  = len(context)
 
     import torch
     ctx_tensor = torch.tensor(context).unsqueeze(0)               # (1, ctx_len)
@@ -195,39 +195,36 @@ def forecast_timesfm(
                 "Upgrade transformers or open an issue."
             )
 
-        # Extract central log-price forecast (median if quantiles, else mean).
+        # Extract central level forecast (median if quantiles, else mean).
         synthesised_fan = True
-        pred_log_levels = None
+        pred_levels = None
         if raw_quantiles is not None:
             qarr = raw_quantiles.cpu().numpy() if hasattr(raw_quantiles, "cpu") else np.array(raw_quantiles)
             if qarr.ndim == 3:
                 qarr = qarr[0]
             if qarr.ndim == 2 and qarr.shape[-1] == len(_Q_LEVELS):
-                pred_log_levels = qarr[:horizon, 4]      # Q0.5 column = median log-price
+                pred_levels = qarr[:horizon, 4]          # Q0.5 column = median level
                 synthesised_fan = False                  # native quantiles available
-        if pred_log_levels is None:
+        if pred_levels is None:
             arr_mean = raw_mean.cpu().numpy() if hasattr(raw_mean, "cpu") else np.array(raw_mean)
-            pred_log_levels = arr_mean.flatten()[:horizon]
+            pred_levels = arr_mean.flatten()[:horizon]
 
-    # ── Convert log-prices → cumulative simple % return ─────────────────────
-    # cum_ret_h = L_{T+h}/L_T − 1 = exp(ℓ̂_{T+h} − ℓ_T) − 1
-    cum_log_ret = pred_log_levels - last_log                      # (horizon,)
-    cum_p50_pct = (np.exp(cum_log_ret) - 1.0) * 100.0             # cum %
+    # ── Convert predicted levels → cumulative simple % return ───────────────
+    # cum_ret_h = (L̂_{T+h} − L_T) / L_T  — linear, bounded, no exp() blowup
+    cum_p50_pct = ((pred_levels - last_lvl) / last_lvl) * 100.0   # (horizon,)
 
-    # ── Synthesise fan bands in log-return space ────────────────────────────
-    # σ_logret · √t is the std of cumulative log-return at horizon t under a
-    # random-walk-with-drift model. Convert each Gaussian z-quantile back to
-    # simple-return space via exp(·) − 1 to preserve lognormal shape.
-    log_returns = np.diff(np.log(levels.values))                  # daily log-rets
-    sigma_log   = float(np.std(log_returns[-252:])) if len(log_returns) >= 5 else 0.01
+    # ── Synthesise fan bands in cumulative-return space ─────────────────────
+    # σ_daily · √t is the std of cumulative simple return at horizon t under
+    # a random-walk-with-drift model. Bands are p50 ± z_q · σ · √t (% units).
+    daily_vol   = float(returns.iloc[-252:].std()) if len(returns) >= 5 else 0.01
     t_steps     = np.arange(1, horizon + 1)
-    cum_log_sd  = sigma_log * np.sqrt(t_steps)
+    cum_sd_pct  = daily_vol * np.sqrt(t_steps) * 100.0            # in cum-% units
 
     from scipy.stats import norm as _norm
     z05, z25, z75, z95 = _norm.ppf([0.05, 0.25, 0.75, 0.95])
 
     def _band_pct(z):
-        return ((np.exp(cum_log_ret + z * cum_log_sd) - 1.0) * 100.0).tolist()
+        return (cum_p50_pct + z * cum_sd_pct).tolist()
 
     dates = _forecast_dates(last_date, horizon)
     band  = {
@@ -245,10 +242,10 @@ def forecast_timesfm(
             "is_r2":           None,   # zero-shot: no training phase
             "model_id":        MODEL_ID,
             "context_len":     ctx_len,
-            "input_transform": "log_price",
+            "input_transform": "raw_level",
             "zero_shot":       True,
             "synthesised_fan": synthesised_fan,
-            "sigma_log_daily": round(sigma_log, 6),
+            "sigma_daily":     round(daily_vol, 6),
         },
         "compute_ms": int((time.time() - t0) * 1_000),
     }
