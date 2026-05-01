@@ -2,6 +2,257 @@
 
 ---
 
+## 2026-05-01 — PR-7 complete: Dead-code sweep + critical crash fix
+
+### What changed
+
+Ran the full dead-code checklist from forecastupgrade.md §E.5. Found and fixed a **critical crash bug**: `factor_decomposition.py` was deleted in PR-1 but both `backtest_engine.py` (top-level import) and `screener_engine.py` (lazy import) still referenced it — meaning the entire `/api/backtest` endpoint crashed on startup and the screener crashed on any rotation backtest call. Restored the file from git history. Also cleaned two stale comments and a stale JSDoc reference.
+
+### Files affected
+
+- `backend/app/services/factor_decomposition.py` — **restored** from `git show HEAD~3` (file was deleted in PR-1 but is still needed for FF5 decomposition in backtest results and screener results; the factor model forecast method was the right thing to delete, not this analysis utility)
+- `backend/app/services/fred_provider.py` — removed stale "Used by train_xgboost.py." comment
+- `backend/app/services/vix_provider.py` — removed stale "Used by train_xgboost.py." comment
+- `frontend/src/ml/MetaEnsemble.js` — updated `blendBands` JSDoc: `from blendWeights()` → `from weightsFromR2() or serverWeights`
+
+### Dead-code sweep results (clean)
+
+- Backend: no remaining `xgboost` / `REGIME_WEIGHTS` forecast-engine references (only acceptable: `edgar_filing_provider` "risk factors" query string, `ai_service` docstring, legacy guard in `forecast_engine.py`)
+- Frontend: no remaining `xgboost` / `HORIZON_CAPS_DAYS` / `EnsembleDegradationStrip` references; `FamaFrenchFactors.jsx` "factor" references are legitimate
+
+---
+
+## 2026-05-01 — PR-6 complete: Architecture diagram update
+
+### What changed
+
+Rewrote `ForecastArchitecture.jsx` from the old 8-layer regime-conditional diagram to the new 6-layer OOS R²-weighted pipeline. EnsembleDegradationStrip and HORIZON_CAPS_DAYS were already removed in PR-1 (confirmed clean).
+
+### Design decisions
+
+- Layer ① Inputs · ② Provider fan-out · ③ Two-pass eval (shadow + forward) · ④ Five methods · ⑤ OOS R² ensemble · ⑥ Outputs
+- Dropped Ang & Timmermann (2012) from the legend (no longer relevant to ensemble weighting)
+- Regime classification (HMM × VIX) stays but is now described as "shown in donut, not used for weighting"
+- Subtitle updated: "8-layer pipeline · regime-conditional ensemble" → "6-layer pipeline · OOS R²-weighted ensemble"
+- Two-pass evaluation layer added to explain the shadow/forward structure to users
+
+### Files affected
+
+- `frontend/src/components/Dashboard/ForecastArchitecture.jsx` — full rewrite
+
+### Build status
+
+`npm run build` — 0 errors.
+
+---
+
+## 2026-05-01 — PR-5 complete: Per-method card IS R² / OOS R² streamlining
+
+### What changed
+
+Replaced the heterogeneous per-method metadata strips with a clean IS R² / OOS R² two-column display as the primary quality signal on every ForecastMethodCard. Bespoke pills (regime_sanity, ljung_box, periods, oos_mse, etc.) are preserved but now hidden behind a collapsible "▸ details" toggle. Removed the complexity badge (HIGH/MED).
+
+### Design decisions
+
+- **IS R²** definition per method:
+  - HMM: coefficient of determination of the posterior expected-return prediction (`bull_mu × P(bull_t) + bear_mu × P(bear_t)`) vs actual returns on full training history.
+  - GP: in-sample R² of the GP posterior mean on the training split (`X_tr, y_tr`).
+  - TimesFM: `null` — zero-shot, no training phase.
+  - N-BEATS/LSTM: `null` — client-side, server doesn't compute.
+- **OOS R²** = `result.oos_r2` from the 30-day shadow holdout (PR-3). Shown as "—" for N-BEATS/LSTM.
+- **Color coding**: R² ≥ 0.5 = green, 0–0.5 = amber, < 0 = red. Uniform across both columns.
+- **Details toggle**: `useState(false)` so all cards start collapsed — users who want the raw kernel/VIX/transition params can expand.
+
+### Backend files affected
+
+- `backend/app/services/forecast_engine.py` — HMM: computes `is_r2` via posterior expected-return R²; added `"is_r2"` to HMM metadata. GP: computes `is_r2` on `X_tr, y_tr`; added `"is_r2"` to GP metadata.
+- `backend/app/services/timesfm_provider.py` — added `"is_r2": None` to TimesFM metadata.
+
+### Frontend files affected
+
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — removed `COMPLEXITY` constant and badge; removed OOS R² header badge (PR-3 addition); added `R2Pair` component showing IS R² + OOS R² as primary quality pair; MetaStrip moved to collapsible `▸ details` section; `useState(false)` for toggle.
+
+### Build status
+
+`npm run build` — 0 errors.
+
+---
+
+## 2026-05-01 — PR-4 complete: OOS R²-weighted ensemble
+
+### What changed
+
+Replaced the regime-conditional rule-based ensemble weighting (`_REGIME_WEIGHTS` 4×5 dict + `get_ensemble_weights`) with OOS R²-based weights (`get_ensemble_weights_from_oos_r2`). Ensemble weights are now proportional to each method's shadow holdout R², with a 30% floor for TimesFM. Regime probs (HMM×VIX cross-classification) are retained for UI display (regime donut, ScenarioPanel) but no longer drive ensemble blending.
+
+### Design decisions
+
+- **TimesFM 30% floor**: zero-shot foundation models can have volatile short-window R² without it reflecting long-run quality. Floor ensures TimesFM is never effectively excluded.
+- **Fallback to equal weights**: if all shadow R²s are zero (e.g. flat market), equal weight is used. Cleaner than defaulting to static priors.
+- **OOS R² computed post-loop**: all server-side shadow results resolve before `get_ensemble_weights_from_oos_r2` is called, so all 3 R²s (HMM, GP, TimesFM) are available simultaneously. Previous approach computed weights during HMM block when GP/TimesFM hadn't resolved yet.
+- **ScenarioPanel preserved**: blendWeights moved inline to ScenarioPanel — regime-conditional priors still useful for hypothetical "what if crisis hits?" scenario stress-testing, just clearly separated from live ensemble weighting.
+- **Ang & Timmermann (2012) citation dropped** from MetaEnsemble.js (per plan) — not applicable to OOS R² path. Retained in ScenarioPanel header since that panel is explicitly about regime scenarios.
+
+### Backend files affected
+
+- `backend/app/services/meta_learner.py` — dropped `_REGIME_WEIGHTS`, dropped `get_ensemble_weights()`, added `get_ensemble_weights_from_oos_r2()`; updated module docstring
+- `backend/app/services/forecast_engine.py` — HMM block now only calls `compute_regime_probs` (not `get_ensemble_weights`); post-loop block builds `method_r2s` from resolved results and calls `get_ensemble_weights_from_oos_r2`
+
+### Frontend files affected
+
+- `frontend/src/ml/MetaEnsemble.js` — dropped `REGIME_WEIGHTS`, dropped `blendWeights` export, added `weightsFromR2()` (backend mirror); updated `computeEnsemble()` to use server weights → `weightsFromR2` fallback; source field now `'oos_r2_server'` or `'oos_r2_client'`
+- `frontend/src/components/Dashboard/ScenarioPanel.jsx` — removed `blendWeights` import; inlined scenario-specific `blendWeights` + `SCENARIO_REGIME_WEIGHTS` with comment clarifying this is for scenario simulation only, not live ensemble weighting
+
+### Build status
+
+`npm run build` — 0 errors. Same pre-existing chunk-size warnings.
+
+---
+
+## 2026-05-01 — PR-3 complete: Shadow holdout OOS evaluation
+
+### What changed
+
+Added a shared OOS holdout window across all server-side forecast methods. Every server method now trains on `[start, T−60]`, forecasts 30 days forward (the "shadow"), and compares its predicted p50 against actual portfolio returns to compute OOS R². Shadow lines appear on the composite chart (dashed, low opacity) overlaid on the historical window, with vertical markers at T−60 and T−30. OOS R² is surfaced in the MethodEffectivenessTable and as a badge on each server-side ForecastMethodCard.
+
+### Design decisions
+
+- **SHADOW_DAYS=60, SHADOW_HORIZON=30, MIN_SHADOW_HISTORY=90** — 30 days of actual vs predicted gives a meaningful R² sample; 90 days minimum history before cutoff ensures the shadow training set is non-trivial.
+- **OOS R²** = `1 − SS_res / SS_tot` where both shadow p50 and actual returns are cumulative % from shadow training end. Expressed in the same units, so portfolio scale doesn't affect the metric.
+- **Parallel shadow**: pool bumped to `max_workers=6` so 3 forward + 3 shadow futures run concurrently. HMM shadow uses 500 MC paths (half of forward) for speed. Shadow timeouts are tighter (20s) so failures don't block the response.
+- **Color coding**: R² ≥ 0.5 = green (good), 0–0.5 = amber, < 0 = red. Negative R² means the model is worse than the naive mean (pessimistic forecast quality signal, useful to display).
+- **Client-side methods** (nbeats, lstm): shadow not available server-side, so `oos_r2 = null` for these two — shown as "—" in the table and no badge on the card.
+
+### Backend files affected
+
+- `backend/app/models/forecast.py` — `shadow_band`, `oos_r2` added to `MethodResult`; `shadow_forecast_start`, `shadow_forecast_end` added to `ForecastResponse`
+- `backend/app/services/forecast_engine.py` — `SHADOW_DAYS/SHADOW_HORIZON/MIN_SHADOW_HISTORY` constants; `_compute_oos_r2()` helper; shadow setup in `run_all_forecasts`; per-method shadow future dispatch; `ForecastResponse` return includes shadow date fields; pool bumped to `max_workers=6`
+
+### Frontend files affected
+
+- `frontend/src/hooks/useForecast.js` — `meta` now includes `shadow_forecast_start` / `shadow_forecast_end` from phase2 response
+- `frontend/src/components/Dashboard/ForecastPanel.jsx` — passes `shadowStart`/`shadowEnd` props to `ForecastComposite`
+- `frontend/src/components/Dashboard/ForecastComposite.jsx` — shadow lines (dashed, 30% opacity) for HMM/GP/TimesFM in historical window; ReferenceLine markers at shadowStart/shadowEnd; OOS R² column replaces heuristic OOS FIT column in MethodEffectivenessTable; memo comparator updated
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — destructures `oos_r2` from result; shows `R² +0.42` badge in card header for server-side methods
+
+### Build status
+
+`npm run build` — 0 errors. Same pre-existing chunk-size warnings (recharts, tfjs).
+
+---
+
+## 2026-05-01 — PR-2 complete: Add TimesFM 2.5 (Google) as 5th forecast method
+
+### What changed
+
+Added `google/timesfm-2.5-200m-pytorch` as an always-warm server-side forecaster (5th method, green #00d4aa). The singleton is pre-loaded in the FastAPI lifespan via `asyncio.to_thread` so the first forecast request doesn't block on a 200 MB model download. Phase 2 now includes 4 server methods: HMM, GP, LSTM features, TimesFM.
+
+### Design decisions
+
+- **Zero-shot**: TimesFM is a foundation model; no fine-tuning on portfolio data. Input is the last 512 equity-curve levels normalized so the last value = 1.0; output levels are converted to cumulative % return as `(level − 1) × 100`.
+- **Quantile mapping**: TimesFM outputs 9 quantiles [0.1…0.9]. Mapped to p5/p25/p50/p75/p95 via linear interpolation (indices 0, avg(1,2), 4, avg(6,7), 8).
+- **TTLCache**: 1-hour in-process cache keyed on SHA-1 of last 252 returns + horizon + end_date.
+- **Color**: #00d4aa (green) — freed from the deleted Factor model.
+- **Ensemble weights**: TimesFM gets 20% in bull markets (strong trend-following), 10-15% in bear/crisis where regime-conditional models dominate.
+- **CPU-only**: torch installed from `--extra-index-url https://download.pytorch.org/whl/cpu` to avoid 2 GB CUDA build. Added to requirements.txt in PR-1.
+
+### New files
+
+- `backend/app/services/timesfm_provider.py` — singleton load, TTLCache, `forecast_timesfm()`, quantile mapping, fallback for older transformers API variants
+
+### Backend files affected
+
+- `backend/app/main.py` — imports `load_timesfm`; calls it via `asyncio.to_thread` in lifespan
+- `backend/app/models/forecast.py` — default methods list now `["nbeats", "hmm", "var", "lstm", "timesfm"]`
+- `backend/app/services/forecast_engine.py` — `METHOD_COLORS/LABELS` +timesfm; `_PHASE2_SERVER_METHODS` includes timesfm; `_server_pool` bumped to `max_workers=3`; timesfm future dispatched alongside HMM/GP; `elif method == "timesfm":` branch with 60s timeout
+- `backend/app/services/meta_learner.py` — `_REGIME_WEIGHTS` rewritten for 5 methods; `all_methods` list updated; stale `model_p50s` key list corrected
+
+### Frontend files affected
+
+- `frontend/src/hooks/useForecast.js` — `PHASE2_METHODS` includes timesfm; `mergeResults` order updated; error-fallback injection includes timesfm
+- `frontend/src/components/Dashboard/ForecastPanel.jsx` — METHOD_ORDER/PHASE2_METHODS; LoadingCard; EtaBar Phase 2 label; header "5 research-backed methods"; empty state
+- `frontend/src/components/Dashboard/ForecastComposite.jsx` — METHOD_ORDER/LABELS/COLORS; "all 4 ✓" → "all 5 ✓"
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — timesfm CITATIONS, COMPLEXITY (MED), METHOD_DESC, `getMetaItems` case
+- `frontend/src/components/Dashboard/ForecastSnapshotCards.jsx` — 5-method grids (`grid-cols-5`); SNAPSHOTS basis text
+- `frontend/src/components/Dashboard/ForecastExport.jsx` — 5-method HTML report; "n=/5 active"; methodology footer
+- `frontend/src/components/Dashboard/ForecastArchitecture.jsx` — TimesFM 2.5 box added to Phase 2 server layer; regime weights updated; "5 research models"
+- `frontend/src/components/Dashboard/EnsembleCard.jsx` — METHOD_COLORS +timesfm
+- `frontend/src/components/Dashboard/ScenarioPanel.jsx` — METHOD_COLORS + methodOrder +timesfm
+- `frontend/src/ml/MetaEnsemble.js` — `REGIME_WEIGHTS` updated to 5-method priors (matches backend)
+
+### Build status
+
+`npm run build` — 0 errors. Same pre-existing chunk-size warnings (recharts, tfjs). No new warnings introduced.
+
+---
+
+## 2026-05-01 — PR-1 complete: Drop XGBoost + Factor from ensemble (4-method ensemble now live)
+
+### What changed
+
+Systematic deletion of XGBoost Quantile and Factor Model (FF5) from the entire forecast stack. Ensemble is now 4 methods: N-BEATS · HMM · Gaussian Process · Attention-LSTM.
+
+### Backend files affected
+
+- `backend/app/models/forecast.py` — default methods list: `["nbeats", "hmm", "var", "lstm"]`
+- `backend/app/routers/forecast.py` — docstring updated (4 methods, Phase 1/2 lists)
+- `backend/app/services/forecast_engine.py` — deleted `prepare_xgboost_features`, `forecast_factor`, `FACTOR_PREMIA`, XGBoost/Factor dispatch branches; `METHOD_COLORS`/`METHOD_LABELS` now 4 entries
+- `backend/app/services/meta_learner.py` — `_REGIME_WEIGHTS` rewritten for 4 methods, `all_methods` list updated
+
+### Frontend files affected
+
+- `frontend/src/hooks/useForecast.js` — `PHASE1_METHODS=['nbeats']`, removed xgb loading state/timing/ref/cap logic, `mergeResults` order updated
+- `frontend/src/components/Dashboard/ForecastPanel.jsx` — all xgb/factor refs removed from EtaBar, LoadingCard, isRunning, empty state, method count
+- `frontend/src/components/Dashboard/ForecastComposite.jsx` — METHOD_ORDER/LABELS/COLORS updated; removed `HORIZON_CAPS_DAYS`, `EnsembleDegradationStrip`, cap ReferenceLine markers, xgboost/factor from `methodQuality`
+- `frontend/src/components/Dashboard/ForecastMethodCard.jsx` — removed xgboost/factor CITATIONS, COMPLEXITY, METHOD_DESC, `getMetaItems` cases
+- `frontend/src/components/Dashboard/ForecastSnapshotCards.jsx` — 4-method grids, updated SNAPSHOTS basis text
+- `frontend/src/components/Dashboard/ForecastExport.jsx` — 4-method HTML report, updated methodology footer
+- `frontend/src/components/Dashboard/ForecastArchitecture.jsx` — diagram updated: removed XGBoost/Factor boxes, regime weights updated to 4-method priors
+- `frontend/src/components/Dashboard/EnsembleCard.jsx` — METHOD_COLORS 4 methods
+- `frontend/src/components/Dashboard/ScenarioPanel.jsx` — METHOD_COLORS + methodOrder updated
+- `frontend/src/ml/MetaEnsemble.js` — `REGIME_WEIGHTS` updated to match backend 4-method priors
+
+### Deleted files
+
+- `backend/app/services/factor_decomposition.py`
+- `backend/scripts/train_xgboost.py`
+- `frontend/src/ml/XGBoostInferer.js`
+- `frontend/public/models/xgboost/` (all 5 ONNX files + meta.json)
+
+### Build status
+
+`npm run build` passes clean — 0 errors.
+
+### State
+
+PR-1 done. Next: PR-2 — add TimesFM 2.5 always-warm provider.
+
+---
+
+## 2026-05-01 — TimesFM 2.5 hosting decided: self-host always-warm on Railway Hobby
+
+### Verification done
+
+- TimesFM 2.5 is **NOT** on HuggingFace Serverless Inference API. Both legacy and new router endpoints return `{"error":"Model not supported by provider hf-inference"}` — the `time-series-forecasting` pipeline isn't a supported task.
+- Canonical model ID: `google/timesfm-2.5-200m-transformers` (the `-pytorch` variant exists but `-transformers` is the supported, transformers-library build, 234k+ downloads, Apache 2.0, not gated).
+- Class: `TimesFm2_5ModelForPrediction`, recently added to `transformers` main.
+- Footprint: 231M params FP32 → ~925 MB on disk, ~1.5 GB peak runtime RAM. No INT8/FP16 quantized variants published; only one ONNX FP32 fork exists (~2 GB).
+
+### Decision
+
+User upgraded Railway free → **Hobby** (8 GB RAM ceiling per replica, 5 GB storage). Hobby ceiling is ~4× what TimesFM needs, so self-hosting is viable. User chose **always-warm** pattern (vs lazy-load with idle-unload) for performance — every forecast hits a hot model, no per-request cold-load latency.
+
+Estimated cost: ~$15-25/mo on Hobby after $5 credit. Dropped the HF Inference API plan entirely.
+
+### Files affected
+
+- `forecastupgrade.md` — TL;DR, target state diagram, Phase B.2 (deployment decision rewritten end-to-end), B.5 (provider sketch now uses `transformers` locally + FastAPI lifespan eager-load), B.6 (cache strategy: dropped HF edge cache layer), B.7 (cost notes: Railway Hobby breakdown), D.3 (architecture diagram), E.1 (memory math: now Hobby plan, ~1.85 GB warm), Open questions Q1+Q2 marked RESOLVED, PR-2 implementation note expanded.
+
+### State
+
+Plan updated, no code changes yet. Implementation will follow the PR-1..PR-7 sequence in `forecastupgrade.md`. PR-2 is the TimesFM provider — needs `transformers` + `torch` added to `requirements.txt`, FastAPI `lifespan` handler for eager load, and Railway service memory bumped to ≥3 GB allocation.
+
+---
+
 ## 2026-04-24 — Cut forecast look-forward 252d (12 months) → 63d (3 months)
 
 ### Rationale

@@ -9,11 +9,6 @@ import { AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE } from '../../utils/chartConfig.j
 // ── Paper citations — matched to FamaFrenchFactors.jsx format ─────────────────
 
 const CITATIONS = {
-  xgboost: [
-    'Chen, T. & Guestrin, C. (2016). XGBoost: A Scalable Tree Boosting System. KDD \'16, 785–794. https://doi.org/10.1145/2939672.2939785',
-    'Gu, S., Kelly, B., & Xiu, D. (2020). Empirical Asset Pricing via Machine Learning. Review of Financial Studies, 33(5), 2223–2273. https://doi.org/10.1093/rfs/hhaa009',
-    'Friedman, J.H. (2001). Greedy function approximation: a gradient boosting machine. Annals of Statistics, 29(5), 1189–1232. https://doi.org/10.1214/aos/1013203451',
-  ],
   nbeats: [
     'Oreshkin, B., Carpov, D., Chapados, N., & Bengio, Y. (2020). N-BEATS: Neural Basis Expansion Analysis for Interpretable Time Series Forecasting. ICLR 2020. https://arxiv.org/abs/1905.10437',
     'Koenker, R. & Bassett, G. (1978). Regression Quantiles. Econometrica, 46(1), 33–50. https://doi.org/10.2307/1913643',
@@ -21,13 +16,6 @@ const CITATIONS = {
   hmm: [
     'Hamilton, J.D. (1989). A new approach to the economic analysis of nonstationary time series and the business cycle. Econometrica, 57(2), 357–384. https://doi.org/10.2307/1912559',
     'Ang, A. & Bekaert, G. (2002). International asset allocation with regime shifts. Review of Financial Studies, 15(4), 1137–1187. https://doi.org/10.1093/rfs/15.4.1137',
-  ],
-  factor: [
-    'Fama, E.F. & French, K.R. (2015). A five-factor asset pricing model. Journal of Financial Economics, 116(1), 1–22. https://doi.org/10.1016/j.jfineco.2014.10.010',
-    'Carhart, M.M. (1997). On persistence in mutual fund performance. Journal of Finance, 52(1), 57–82. https://doi.org/10.1111/j.1540-6261.1997.tb03808.x',
-    'Novy-Marx, R. (2013). The other side of value: The gross profitability premium. Journal of Financial Economics, 108(1), 1–28. https://doi.org/10.1016/j.jfineco.2013.01.003',
-    'Seyhun, H.N. (1986). Insiders\' profits, costs of trading, and market efficiency. Journal of Financial Economics, 16(2), 189–212. https://doi.org/10.1016/0304-405X(86)90060-7',
-    'Lakonishok, J. & Lee, I. (2001). Are insider trades informative? Review of Financial Studies, 14(1), 79–111. https://doi.org/10.1093/rfs/14.1.79',
   ],
   var: [
     'Rasmussen, C.E. & Williams, C.K.I. (2006). Gaussian Processes for Machine Learning. MIT Press. https://gaussianprocess.org/gpml/',
@@ -40,27 +28,21 @@ const CITATIONS = {
     'Fischer, T. & Krauss, C. (2018). Deep learning with long short-term memory networks for financial market predictions. European Journal of Operational Research, 270(2), 654–669. https://doi.org/10.1016/j.ejor.2017.11.054',
     'Gal, Y. & Ghahramani, Z. (2016). Dropout as a Bayesian approximation: representing model uncertainty in deep learning. Proceedings of ICML 33, 1050–1059. https://proceedings.mlr.press/v48/gal16.html',
   ],
+  timesfm: [
+    'Das, A., Kong, W., Leach, A., Mathur, S., Sen, R., & Yu, R. (2024). A decoder-only foundation model for time-series forecasting. ICML 2024. https://arxiv.org/abs/2310.10688',
+    'Google Research (2024). TimesFM 2.5 — improved zero-shot time-series forecasting. HuggingFace Hub: google/timesfm-2.5-200m-pytorch.',
+  ],
 }
 
 // Out-of-sample methodology citation — shown on every card
 const OOS_CITATION = 'Lopez de Prado, M. (2018). Advances in Financial Machine Learning, Ch. 7 (Purged Walk-Forward CV). https://doi.org/10.1002/9781119482161'
 
-const COMPLEXITY = {
-  xgboost:     { label: 'MED',  color: 'var(--accent-yellow)' },
-  nbeats:      { label: 'HIGH', color: 'var(--accent-red)' },
-  hmm:         { label: 'MED',  color: 'var(--accent-yellow)' },
-  factor:      { label: 'LOW',  color: 'var(--accent-green)' },
-  var:         { label: 'HIGH', color: 'var(--accent-red)' },
-  lstm:        { label: 'HIGH', color: 'var(--accent-red)' },
-}
-
 const METHOD_DESC = {
-  xgboost:     'Histogram gradient boosting quantile regressors (sklearn HistGBR) — 5 models trained per quantile (p5/p25/p50/p75/p95) on 14 features: 9 market microstructure signals (momentum, realized vol, vol regime, RSI) + 5 live macro signals (10Y-2Y yield curve, BAA credit spread, TIPS real yield, VIX percentile rank, VIX term slope). Purged walk-forward CV with 21-day embargo + early stopping (López de Prado 2018). Runs in browser via ONNX Runtime Web; fan width scales by √(t/21) for the 63-day horizon. Rank IC ≥ 0.03 is considered useful in financial ML practice (Gu, Kelly & Xiu 2020).',
-  nbeats:      'N-BEATS (Neural Basis Expansion Analysis): 3 residual stacks of fully-connected blocks. Each block explains part of the input (backcast) and contributes a partial multi-horizon forecast. Replaces GARCH which only forecasts conditional variance. N-BEATS directly predicts 21-day return sequences at 5 quantiles (pinball loss) and runs 3 recursive 21-day periods to cover the 63-day chart natively. Runs in browser via pure-JS matrix math (no runtime dependency).',
-  hmm:         '2-state Hidden Markov Model (Bull / Bear). Transition probabilities and regime-conditional return distributions estimated via Baum-Welch EM with 10 random initialisations to escape local optima.',
-  factor:      'Factor-anchored GBM: expected return derived from FF5 + Momentum (UMD, Carhart 1997) loadings × consensus long-run premia (Damodaran 2024), replacing naive historical mean. RMW serves as the quality/profitability factor (Novy-Marx 2013). Momentum beta is automatically included when Ken French daily data is available. Idiosyncratic vol (σ_ε = total vol × √(1−R²)) is used as the noise term — avoids double-counting systematic risk. Reduces look-ahead bias from short backtests.',
-  var:         'Gaussian Process autoregression (Phase 2D): replaces VAR with a Bayesian nonparametric model. ARD Matérn 5/2 kernel learns which of the last 7 daily returns are most predictive (one length scale per lag). WhiteKernel absorbs observation noise. GP posterior gives exact Bayesian uncertainty — no Monte Carlo needed. Fan chart uses Gaussian approximation: cumulative return at T ~ N(Σμₜ, Σσₜ²). No stationarity requirement; complexity tuned by marginal likelihood. OOS NLPD measures calibration quality.',
-  lstm:        'Attention-LSTM: single LSTM(64) encoder → Bahdanau temporal attention → Dense(32) → Dense(1). Attention lets the model selectively weight past hidden states, focusing on regime-relevant windows. MC Dropout (200 passes) produces Bayesian uncertainty bands. Chronological 70/15/15 split; early stopping on val loss.',
+  nbeats: 'N-BEATS (Neural Basis Expansion Analysis): 3 residual stacks of fully-connected blocks. Each block explains part of the input (backcast) and contributes a partial multi-horizon forecast. Replaces GARCH which only forecasts conditional variance. N-BEATS directly predicts 21-day return sequences at 5 quantiles (pinball loss) and runs 3 recursive 21-day periods to cover the 63-day chart natively. Runs in browser via pure-JS matrix math (no runtime dependency).',
+  hmm:    '2-state Hidden Markov Model (Bull / Bear). Transition probabilities and regime-conditional return distributions estimated via Baum-Welch EM with 10 random initialisations to escape local optima.',
+  var:    'Gaussian Process autoregression: replaces VAR with a Bayesian nonparametric model. ARD Matérn 5/2 kernel learns which of the last 7 daily returns are most predictive (one length scale per lag). WhiteKernel absorbs observation noise. GP posterior gives exact Bayesian uncertainty — no Monte Carlo needed. Fan chart uses Gaussian approximation: cumulative return at T ~ N(Σμₜ, Σσₜ²). No stationarity requirement; complexity tuned by marginal likelihood. OOS NLPD measures calibration quality.',
+  lstm:    'Attention-LSTM: single LSTM(64) encoder → Bahdanau temporal attention → Dense(32) → Dense(1). Attention lets the model selectively weight past hidden states, focusing on regime-relevant windows. MC Dropout (200 passes) produces Bayesian uncertainty bands. Chronological 70/15/15 split; early stopping on val loss.',
+  timesfm: 'TimesFM 2.5 (Google Research, ICML 2024): a 200M-parameter decoder-only foundation model pre-trained on a large corpus of real-world time series. Runs zero-shot — no fine-tuning on your portfolio data. The equity curve is converted to a normalised level series (last = 1.0), fed to the always-warm server singleton, and the 9-quantile output is interpolated to p5/p25/p50/p75/p95. The singleton is pre-loaded at server startup so it does not block your first forecast request.',
 }
 
 // ── InfoTooltip — mirrors FamaFrenchFactors.jsx pattern ──────────────────────
@@ -210,43 +192,6 @@ function fmtPct(v) { return v != null ? `${(v * 100).toFixed(1)}%` : '—' }
 function getMetaItems(method, meta) {
   if (!meta) return []
   switch (method) {
-    case 'xgboost': {
-      const mc = meta.macro_context ?? {}
-      const yieldCurve = mc.yield_curve_10y2y != null ? `${mc.yield_curve_10y2y.toFixed(2)}%` : '—'
-      const yieldRegime = mc.yield_curve_10y2y != null
-        ? (mc.yield_curve_10y2y < 0 ? 'inverted' : mc.yield_curve_10y2y < 0.5 ? 'flat' : 'normal')
-        : null
-      // rank_ic (Spearman) is more meaningful than OOS R² for financial return prediction
-      const icVal = meta.rank_ic != null ? fmt(meta.rank_ic, 3) : (meta.oos_r2 != null ? fmt(meta.oos_r2, 3) : '—')
-      const icLabel = meta.rank_ic != null ? 'rank IC' : 'OOS R²'
-      const items = [
-        { label: icLabel,    value: icVal },
-        { label: 'vol rgm',  value: meta.vol_regime ?? '—', warn: meta.vol_regime === 'high' },
-        { label: 'RSI-14',   value: meta.rsi_14 != null ? fmt(meta.rsi_14, 2) : '—' },
-        { label: 'n obs',    value: meta.n_obs },
-      ]
-      if (mc.vix_spot != null)
-        items.push({ label: 'VIX',    value: mc.vix_spot.toFixed(1), warn: mc.vix_pct_rank > 0.75 })
-      if (mc.yield_curve_10y2y != null)
-        items.push({ label: '10Y-2Y', value: yieldCurve, warn: yieldRegime === 'inverted' })
-      if (!mc.macro_available)
-        items.push({ label: 'macro',  value: 'neutral', warn: true })
-      const reddit = meta.reddit_context
-      if (reddit?.available)
-        items.push({ label: 'WSB',    value: `${reddit.portfolio_mentions_7d?.toFixed(0)}×`, warn: false })
-      if (meta.news_article_count != null)
-        items.push({ label: 'articles', value: meta.news_article_count })
-      const ins = meta.insider_context
-      if (ins?.available) {
-        const netBuy = ins.portfolio_net_buying_30d
-        items.push({
-          label: 'insiders',
-          value: `${netBuy >= 0 ? '+' : ''}$${Math.abs(netBuy).toFixed(1)}M`,
-          warn: netBuy < -5,
-        })
-      }
-      return items
-    }
     case 'nbeats': {
       const mc = meta.macro_context ?? {}
       const items = [
@@ -278,41 +223,6 @@ function getMetaItems(method, meta) {
         items.push({ label: 'articles', value: meta.news_article_count })
       return items
     }
-    case 'factor': {
-      const factorLabel = meta.source === 'historical_fallback' ? 'hist'
-        : meta.source === 'ff6' ? 'FF5+Mom'
-        : 'FF5'
-      const items = [
-        { label: 'μ factor', value: fmtPct(meta.mu_factor_ann) },
-        { label: 'μ hist',   value: fmtPct(meta.mu_hist_ann) },
-        { label: 'R²',       value: fmt(meta.r_squared, 2) },
-        { label: 'model',    value: factorLabel, warn: meta.source === 'historical_fallback' },
-      ]
-      if (meta.mom_beta != null)
-        items.push({ label: 'Mom β',     value: fmt(meta.mom_beta, 2) })
-      if (meta.rmw_beta != null)
-        items.push({ label: 'Quality β', value: fmt(meta.rmw_beta, 2) })
-      if (meta.macro_adjustment) {
-        const adj = meta.macro_adjustment
-        items.push({ label: 'mkt scale', value: `${(adj.cycle_scale * 100).toFixed(0)}%`, warn: adj.cycle_scale < 0.85 })
-        items.push({ label: '10Y-2Y',    value: `${adj.yield_curve_10y2y?.toFixed(2)}%`,  warn: adj.yield_curve_10y2y < 0 })
-      }
-      const ins = meta.insider_context
-      if (ins?.available) {
-        const netBuy = ins.portfolio_net_buying_30d
-        items.push({
-          label: 'insiders 30d',
-          value: `${netBuy >= 0 ? '+' : ''}$${Math.abs(netBuy).toFixed(1)}M`,
-          warn:  netBuy < -5,
-        })
-        items.push({
-          label: 'buy ratio',
-          value: `${(ins.portfolio_buy_ratio_30d * 100).toFixed(0)}%`,
-          warn:  ins.portfolio_buy_ratio_30d < 0.3,
-        })
-      }
-      return items
-    }
     case 'var': {
       const items = [
         { label: 'OOS R²',   value: meta.oos_r2 != null ? fmt(meta.oos_r2, 3) : '—' },
@@ -338,18 +248,50 @@ function getMetaItems(method, meta) {
         items.push({ label: 'articles', value: meta.news_article_count })
       return items
     }
+    case 'timesfm': {
+      return [
+        { label: 'model',     value: '200M params' },
+        { label: 'inference', value: 'zero-shot' },
+        { label: 'ctx len',   value: `${meta.context_len ?? 512}d` },
+        { label: 'quantiles', value: `${meta.q_levels?.length ?? 9}` },
+        { label: 'source',    value: 'Google (ICML 2024)' },
+      ]
+    }
     default:
       return []
   }
 }
 
+function r2Color(v) {
+  if (v == null) return 'var(--text-secondary)'
+  if (v >= 0.5)  return 'var(--accent-green)'
+  if (v >= 0.0)  return '#ffd43b'
+  return '#ff4757'
+}
+
+function R2Pair({ isR2, oosR2 }) {
+  const fmt = v => v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}` : '—'
+  return (
+    <div className="flex gap-4 mt-2 mb-1">
+      {[['IS R²', isR2], ['OOS R²', oosR2]].map(([lbl, val]) => (
+        <div key={lbl}>
+          <div className="mono" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.65 }}>{lbl}</div>
+          <div className="mono font-bold" style={{ fontSize: 13, color: r2Color(val), lineHeight: 1.2 }}>
+            {fmt(val)}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── Main card ─────────────────────────────────────────────────────────────────
 
 function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) {
-  const { method, label, color, forecast, metadata, error, compute_ms } = result ?? {}
-  const complexity = COMPLEXITY[method] ?? { label: '—', color: 'var(--text-secondary)' }
-  const citations  = CITATIONS[method] ?? []
-  const desc       = METHOD_DESC[method] ?? ''
+  const [showDetails, setShowDetails] = useState(false)
+  const { method, label, color, forecast, metadata, error, compute_ms, oos_r2 } = result ?? {}
+  const citations = CITATIONS[method] ?? []
+  const desc      = METHOD_DESC[method] ?? ''
 
   const chartData = useMemo(() => buildChartData(forecast, lastValue), [forecast, lastValue])
 
@@ -372,9 +314,7 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
             <div className="flex-1 flex flex-col items-center justify-center text-center">
               <div className="mono text-xs mb-1" style={{ color: color ?? 'var(--accent-blue)' }}>⟳ Computing in browser</div>
               <div className="mono text-xs" style={{ color: 'var(--text-secondary)' }}>
-                {method === 'xgboost'
-                  ? '5 quantile models · ONNX Runtime Web'
-                  : method === 'nbeats'
+                {method === 'nbeats'
                   ? '12-period recursive · pure-JS weights'
                   : '200 MC Dropout passes · TensorFlow.js'
                 }
@@ -396,7 +336,7 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
     <div className="rounded-lg border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-2">
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />
           <span className="mono font-bold text-xs" style={{ color: 'var(--text-primary)' }}>
@@ -404,18 +344,15 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
           </span>
           <InfoTooltip content={desc} citations={citations} />
         </div>
-        <div className="flex items-center gap-2">
-          <span className="mono text-xs px-1.5 py-0.5 rounded"
-            style={{ background: 'rgba(0,0,0,0.3)', color: complexity.color, border: `1px solid ${complexity.color}`, opacity: 0.85, fontSize: 9 }}>
-            {complexity.label}
+        {compute_ms > 0 && (
+          <span className="mono" style={{ color: 'var(--text-secondary)', fontSize: 10 }}>
+            {compute_ms < 1000 ? `${compute_ms}ms` : `${(compute_ms / 1000).toFixed(1)}s`}
           </span>
-          {compute_ms > 0 && (
-            <span className="mono text-xs" style={{ color: 'var(--text-secondary)', fontSize: 10 }}>
-              {compute_ms < 1000 ? `${compute_ms}ms` : `${(compute_ms / 1000).toFixed(1)}s`}
-            </span>
-          )}
-        </div>
+        )}
       </div>
+
+      {/* IS R² / OOS R² — primary quality signal */}
+      <R2Pair isR2={metadata?.is_r2 ?? null} oosR2={oos_r2 ?? null} />
 
       {/* Error state */}
       {error && (
@@ -462,8 +399,19 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
         </ResponsiveContainer>
       )}
 
-      {/* Metadata strip */}
-      {forecast && <MetaStrip method={method} meta={metadata} color={color} />}
+      {/* Collapsible detail strip */}
+      {forecast && (
+        <div>
+          <button
+            onClick={() => setShowDetails(d => !d)}
+            className="mono"
+            style={{ fontSize: 9, color: 'var(--text-secondary)', background: 'none', border: 'none', padding: '4px 0', cursor: 'pointer', opacity: 0.6 }}
+          >
+            {showDetails ? '▾ details' : '▸ details'}
+          </button>
+          {showDetails && <MetaStrip method={method} meta={metadata} color={color} />}
+        </div>
+      )}
 
       {/* Citation footer — matches FamaFrenchFactors.jsx */}
       <div className="mt-3 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
@@ -478,7 +426,7 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
 }
 
 // Memoized so a parent re-render (e.g. ensemble recompute, tooltip state
-// elsewhere) doesn't force six full chart re-layouts on every click.
+// elsewhere) doesn't force four full chart re-layouts on every click.
 export default memo(ForecastMethodCardImpl, (prev, next) =>
   prev.result === next.result &&
   prev.loading === next.loading &&

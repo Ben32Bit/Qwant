@@ -1,33 +1,24 @@
 /**
- * MetaEnsemble — Client-Side Regime-Conditional Ensemble (Phase 5D).
+ * MetaEnsemble — Client-Side OOS R²-Weighted Ensemble (Phase C.4).
  *
- * Combines base model fan bands using regime-probability-weighted blending.
- * Disagreement across models widens the ensemble confidence bands.
+ * Combines base model fan bands weighted by each method's OOS R² on a
+ * 30-day shadow holdout window. Disagreement across models widens the
+ * ensemble confidence bands (Krogh & Vedelsby 1995).
  *
  * Two inference paths:
- *   1. ONNX (preferred): per-regime elastic nets trained by train_meta_learner.py
- *      and exported to frontend/public/models/meta/{regime}.onnx.
- *   2. Rule-based fallback: Ang & Timmermann (2012) priors (always available).
+ *   1. Server weights (preferred): `ensemble_weights` from ForecastResponse,
+ *      computed server-side by get_ensemble_weights_from_oos_r2().
+ *   2. Client fallback: `weightsFromR2()` mirrors the backend algorithm
+ *      using oos_r2 from each MethodResult (used when server weights absent).
  *
  * References
  * ----------
  * Wolpert, D.H. (1992). Stacked generalization. Neural Networks, 5(2), 241–259.
- * Ang, A. & Timmermann, A. (2012). Regime Changes and Financial Markets.
- *   Annual Review of Financial Economics, 4(1), 313–337.
  * Krogh, A. & Vedelsby, J. (1995). Neural Network Ensembles, Cross Validation,
  *   and Active Learning. NeurIPS 8, 231–238.
  * Lakshminarayanan, B. et al. (2017). Simple and Scalable Predictive Uncertainty
  *   Estimation Using Deep Ensembles. NeurIPS 30.
  */
-
-// ── Rule-based regime-conditional weights (inline fallback) ───────────────────
-// Mirrors backend/app/services/meta_learner.py::_REGIME_WEIGHTS
-const REGIME_WEIGHTS = {
-  bull_low_vol:  { factor: 0.35, xgboost: 0.25, hmm: 0.18, var: 0.12, nbeats: 0.05, lstm: 0.05 },
-  bull_high_vol: { xgboost: 0.35, hmm: 0.25, factor: 0.18, var: 0.12, nbeats: 0.05, lstm: 0.05 },
-  bear:          { hmm: 0.35, var: 0.25, factor: 0.18, xgboost: 0.12, nbeats: 0.05, lstm: 0.05 },
-  crisis:        { var: 0.35, hmm: 0.30, xgboost: 0.15, factor: 0.10, nbeats: 0.05, lstm: 0.05 },
-}
 
 // ── ONNX model cache ──────────────────────────────────────────────────────────
 const _onnxCache = {}
@@ -91,31 +82,47 @@ export function computeDisagreement(results, horizonIdx = 20) {
 }
 
 /**
- * Compute ensemble-blended weights from regime probabilities (rule-based path).
+ * Compute ensemble weights from OOS R² values (mirrors backend get_ensemble_weights_from_oos_r2).
  *
- * @param  {Object} regimeProbs  - {bull_low_vol:…, bull_high_vol:…, bear:…, crisis:…}
- * @param  {string[]} available  - methods that produced forecasts
+ * Used as a client-side fallback when serverWeights are not yet available.
+ * TimesFM gets a 30% floor for stability on short shadow windows.
+ *
+ * @param  {Array}  results   - MethodResult[] with .oos_r2 fields
  * @returns {Object} {method: weight}
  */
-export function blendWeights(regimeProbs, available) {
-  const avail  = new Set(available)
-  const weights = {}
+export function weightsFromR2(results) {
+  const TFM_FLOOR = 0.30
+  const r2s = {}
+  for (const r of results) {
+    if (r.forecast?.p50?.length > 0) r2s[r.method] = r.oos_r2 ?? 0
+  }
 
-  for (const [regime, prob] of Object.entries(regimeProbs)) {
-    if (regime === 'dominant') continue
-    const rw = REGIME_WEIGHTS[regime] ?? {}
-    for (const [method, w] of Object.entries(rw)) {
-      if (avail.has(method)) {
-        weights[method] = (weights[method] ?? 0) + prob * w
-      }
+  const clipped = {}
+  for (const [m, r2] of Object.entries(r2s)) clipped[m] = Math.max(0, r2)
+  const total = Object.values(clipped).reduce((a, b) => a + b, 0)
+
+  const weights = {}
+  if (total <= 0) {
+    const n = Object.keys(r2s).length
+    for (const m of Object.keys(r2s)) weights[m] = n > 0 ? +(1 / n).toFixed(4) : 0
+    return weights
+  }
+
+  for (const [m, w] of Object.entries(clipped)) weights[m] = w / total
+
+  // TimesFM 30% floor
+  if ('timesfm' in weights && weights.timesfm < TFM_FLOOR) {
+    const deficit = TFM_FLOOR - weights.timesfm
+    weights.timesfm = TFM_FLOOR
+    const others = Object.fromEntries(Object.entries(weights).filter(([m]) => m !== 'timesfm'))
+    const otherTotal = Object.values(others).reduce((a, b) => a + b, 0)
+    if (otherTotal > 0) {
+      const scale = (1 - TFM_FLOOR) / otherTotal
+      for (const m in others) weights[m] = others[m] * scale
     }
   }
 
-  // Normalise
-  const total = Object.values(weights).reduce((a, b) => a + b, 0)
-  if (total > 0) {
-    for (const m in weights) weights[m] = +(weights[m] / total).toFixed(4)
-  }
+  for (const m in weights) weights[m] = +weights[m].toFixed(4)
   return weights
 }
 
@@ -127,7 +134,7 @@ export function blendWeights(regimeProbs, available) {
  * to widen the ensemble's uncertainty (Krogh & Vedelsby 1995).
  *
  * @param {Array}  results      - MethodResult array (with forecast bands)
- * @param {Object} weights      - {method: weight} from blendWeights()
+ * @param {Object} weights      - {method: weight} from weightsFromR2() or serverWeights
  * @param {Object} disagreement - from computeDisagreement()
  * @returns {{dates:string[], p5:number[], p25:number[], p50:number[], p75:number[], p95:number[]}}
  */
@@ -206,36 +213,29 @@ export function blendBands(results, weights, disagreement) {
 }
 
 /**
- * Main entry: compute ensemble forecast from base model results + regime.
+ * Main entry: compute ensemble forecast from base model results.
  *
  * @param {Array}  results       - MethodResult[] (from useForecast)
- * @param {Object} regimeProbs   - from ForecastResponse.regime_probs
- * @param {Object} serverWeights - pre-computed weights from ForecastResponse.ensemble_weights (optional)
+ * @param {Object} regimeProbs   - from ForecastResponse.regime_probs (for display only)
+ * @param {Object} serverWeights - pre-computed weights from ForecastResponse.ensemble_weights (preferred)
  * @returns {{band, weights, disagreement, source}}
  */
 export async function computeEnsemble(results, regimeProbs, serverWeights = null) {
-  const available  = results.filter(r => r.forecast?.p50?.length > 0).map(r => r.method)
-  if (!available.length || !regimeProbs) return null
+  const available = results.filter(r => r.forecast?.p50?.length > 0).map(r => r.method)
+  if (!available.length) return null
 
   const disagreement = computeDisagreement(results)
 
-  // Try ONNX per-regime models (Phase 5D preferred path)
-  let weights     = null
-  let source      = 'rule_based'
-  const dominant  = regimeProbs.dominant ?? Object.entries(regimeProbs)
-    .filter(([k]) => k !== 'dominant')
-    .reduce((a, b) => a[1] > b[1] ? a : b)[0]
+  // Server weights are authoritative (OOS R²-based, computed by backend).
+  // Client fallback mirrors the same algorithm using oos_r2 from MethodResults.
+  let weights = serverWeights ?? weightsFromR2(results)
+  const source = serverWeights ? 'oos_r2_server' : 'oos_r2_client'
 
-  const session = await tryLoadOnnxModel(dominant)
-  if (session) {
-    // ONNX path: run per-regime elastic net
-    // (implementation wired when pre-trained models are available)
-    source = 'onnx'
-  }
-
-  // Use server-computed weights if available; else rule-based
-  weights = serverWeights ?? blendWeights(regimeProbs, available)
-  if (source === 'onnx') source = 'onnx_weights'
+  const dominant = regimeProbs
+    ? (regimeProbs.dominant ?? Object.entries(regimeProbs)
+        .filter(([k]) => k !== 'dominant')
+        .reduce((a, b) => a[1] > b[1] ? a : b)[0])
+    : null
 
   const band = blendBands(results, weights, disagreement)
   if (!band) return null

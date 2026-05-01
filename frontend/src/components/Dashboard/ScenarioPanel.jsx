@@ -23,8 +23,33 @@
  */
 
 import { useMemo, useState } from 'react'
-import { blendWeights } from '../../ml/MetaEnsemble.js'
 import { computeKellyFromEnsemble, regimeAdjustKelly } from '../../ml/KellyCalculator.js'
+
+// Regime-conditional weights used for SCENARIO SIMULATION ONLY.
+// The live ensemble uses OOS R² weights from the shadow holdout.
+// These priors show how weights would shift under a hypothetical regime
+// distribution — useful for stress-testing but not authoritative.
+const SCENARIO_REGIME_WEIGHTS = {
+  bull_low_vol:  { nbeats: 0.20, timesfm: 0.20, hmm: 0.25, var: 0.20, lstm: 0.15 },
+  bull_high_vol: { nbeats: 0.15, timesfm: 0.20, hmm: 0.30, var: 0.20, lstm: 0.15 },
+  bear:          { nbeats: 0.15, timesfm: 0.10, hmm: 0.35, var: 0.25, lstm: 0.15 },
+  crisis:        { nbeats: 0.10, timesfm: 0.15, hmm: 0.30, var: 0.35, lstm: 0.10 },
+}
+
+function blendWeights(regimeProbs, available) {
+  const avail = new Set(available)
+  const weights = {}
+  for (const [regime, prob] of Object.entries(regimeProbs)) {
+    if (regime === 'dominant') continue
+    const rw = SCENARIO_REGIME_WEIGHTS[regime] ?? {}
+    for (const [method, w] of Object.entries(rw)) {
+      if (avail.has(method)) weights[method] = (weights[method] ?? 0) + prob * w
+    }
+  }
+  const total = Object.values(weights).reduce((a, b) => a + b, 0)
+  if (total > 0) for (const m in weights) weights[m] = +(weights[m] / total).toFixed(4)
+  return weights
+}
 
 // ── Scenario definitions ──────────────────────────────────────────────────────
 
@@ -58,8 +83,7 @@ const SCENARIO_DESC = {
 const REGIME_LABELS = { bull_low_vol: 'Bull/Low Vol', bull_high_vol: 'Bull/High Vol', bear: 'Bear', crisis: 'Crisis' }
 const REGIME_COLORS = { bull_low_vol: '#00d4aa', bull_high_vol: '#4a9eff', bear: '#ff6b35', crisis: '#ff4757' }
 const METHOD_COLORS = {
-  factor: '#00d4aa', xgboost: '#4a9eff', hmm: '#a855f7',
-  var: '#ff6b35', nbeats: '#ffd43b', lstm: '#ff4757',
+  nbeats: '#ffd43b', timesfm: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757',
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -160,7 +184,7 @@ function ScenarioDetail({ scenarioKey, scenarioProbs, availableMethods, ensemble
   const meta  = SCENARIO_META[scenarioKey]
   const color = meta?.color ?? '#4a9eff'
 
-  const methodOrder = ['factor', 'xgboost', 'hmm', 'var', 'nbeats', 'lstm']
+  const methodOrder = ['nbeats', 'timesfm', 'hmm', 'var', 'lstm']
 
   return (
     <div className="space-y-3">

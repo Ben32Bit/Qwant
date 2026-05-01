@@ -1,13 +1,13 @@
 import React from 'react'
 
-const METHOD_ORDER  = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
-const METHOD_LABELS = { xgboost: 'XGB', nbeats: 'NBT', factor: 'FAC', hmm: 'HMM', var: 'GP', lstm: 'LSTM' }
-const METHOD_COLORS = { xgboost: '#4a9eff', nbeats: '#ffd43b', factor: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757' }
+const METHOD_ORDER  = ['nbeats', 'timesfm', 'hmm', 'var', 'lstm']
+const METHOD_LABELS = { nbeats: 'NBT', timesfm: 'TFM', hmm: 'HMM', var: 'GP', lstm: 'LSTM' }
+const METHOD_COLORS = { nbeats: '#ffd43b', timesfm: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757' }
 
 const SNAPSHOTS = [
-  { label: '1 week',   days: 5,  idx: 4,  basis: 'all 6 models legitimate — within every training window' },
-  { label: '1 month',  days: 21, idx: 20, basis: 'all 6 models legitimate — = XGBoost training horizon' },
-  { label: '3 months', days: 63, idx: 62, basis: '5 models (XGBoost capped at 21d)' },
+  { label: '1 week',   days: 5,  idx: 4,  basis: 'all 5 models legitimate — within every training window' },
+  { label: '1 month',  days: 21, idx: 20, basis: 'all 5 models legitimate — within N-BEATS training period' },
+  { label: '3 months', days: 63, idx: 62, basis: 'all 5 models — full 63-day horizon' },
 ]
 
 function fmtPct(v) {
@@ -124,7 +124,7 @@ function SnapshotCard({ label, days, idx, basis, results, ensemble, lastValue })
       )}
 
       {/* Per-method dots */}
-      <div className="grid grid-cols-6 gap-1 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
+      <div className="grid grid-cols-5 gap-1 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
         {METHOD_ORDER.map(method => {
           const r = (results ?? []).find(x => x.method === method)
           const v = r?.forecast?.p50?.[idx]
@@ -142,10 +142,6 @@ function SnapshotCard({ label, days, idx, basis, results, ensemble, lastValue })
 
 /**
  * Three-card snapshot: 1w / 1m / 3m ensemble medians + range + per-method dots.
- *
- * Each horizon is chosen so the shortest-training model (XGBoost, 21d) is still
- * within (or at) its cap, keeping all figures academically defensible. The
- * continuous 3-month chart elsewhere is exploratory only.
  */
 export default function ForecastSnapshotCards({ results, ensemble, lastValue, loading }) {
   const hasAny = (results ?? []).some(r => r?.forecast?.p50?.length)

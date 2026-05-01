@@ -10,18 +10,13 @@ import KellyPanel from './KellyPanel.jsx'
 import ScenarioPanel from './ScenarioPanel.jsx'
 import ForecastArchitecture from './ForecastArchitecture.jsx'
 
-const METHOD_ORDER = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
+const METHOD_ORDER = ['nbeats', 'timesfm', 'hmm', 'var', 'lstm']
 
-const PHASE2_METHODS    = new Set(['hmm', 'var', 'lstm'])
-const PHASE1_METHODS    = new Set(['xgboost', 'nbeats', 'factor'])
+const PHASE2_METHODS = new Set(['hmm', 'var', 'lstm', 'timesfm'])
+const PHASE1_METHODS = new Set(['nbeats'])
 
-// Typical durations for the ETA bar (milliseconds). These drive the ETA label
-// the user sees under each bar; overshooting the true wall-clock makes the bar
-// sit at 97% and flash "still running" which reads as broken. Calibrate to the
-// cold-boot P90 on Railway's shared CPU so warm runs look "fast" instead.
-const PHASE1_EST_MS  = 8_000    // macro + insider provider fan-out + 3 method preps
-const XGB_EST_MS     = 3_000    // ONNX Runtime Web: ~1-3s (XGBoost)
-const NBEATS_EST_MS  = 5_000    // ONNX Runtime Web: ~3-5s (N-BEATS 12 periods)
+const PHASE1_EST_MS  = 8_000    // macro + insider provider fan-out + N-BEATS prep
+const NBEATS_EST_MS  = 5_000    // pure-JS browser inference: ~2-5s
 const PHASE2_EST_MS  = 90_000   // HMM + GP + tier-2 providers, cold-boot P90
 const LSTM_EST_MS    = 5_000    // TF.js browser inference: ~2-5s
 
@@ -38,9 +33,6 @@ function CompositeChartSection({ children }) {
         style={{ color: 'var(--text-secondary)', opacity: 0.75, background: 'transparent', border: 'none', padding: '4px 0' }}
       >
         {open ? '▾' : '▸'} 3-month exploratory chart
-        <span className="ml-2" style={{ opacity: 0.6 }}>
-          · XGBoost capped at 21 days; full ensemble runs to 63 trading days
-        </span>
       </button>
       {open && children}
     </div>
@@ -50,16 +42,14 @@ function CompositeChartSection({ children }) {
 // Placeholder cards while a phase is loading
 function LoadingCard({ method, browserCompute = false }) {
   const LABELS = {
-    xgboost: 'XGBoost Quantile',
     nbeats:  'N-BEATS Neural',
+    timesfm: 'TimesFM 2.5 (Google)',
     hmm:     'Hidden Markov Model',
-    factor:  'Factor Model (FF5)',
     var:     'Gaussian Process (GP)',
     lstm:    'Attention-LSTM',
   }
   const COLORS = {
-    xgboost: '#4a9eff', nbeats: '#ffd43b', hmm: '#a855f7',
-    factor: '#00d4aa', var: '#ff6b35', lstm: '#ff4757',
+    nbeats: '#ffd43b', timesfm: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757',
   }
   return (
     <ForecastMethodCard
@@ -73,12 +63,11 @@ function LoadingCard({ method, browserCompute = false }) {
 
 // ── ETA Progress Bar ──────────────────────────────────────────────────────────
 
-function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef }) {
+function EtaBar({ loading, p1StartRef, nbeatsStartRef, p2StartRef, lstmStartRef }) {
   const [elapsed, setElapsed] = useState(0)
 
-  // Priority: p1 > xgb/nbeats (show xgb if both running) > p2 > lstm
   const activePhase = loading.phase1 ? 'p1'
-    : (loading.xgb || loading.nbeats) ? (loading.xgb ? 'xgb' : 'nbeats')
+    : loading.nbeats ? 'nbeats'
     : loading.phase2 ? 'p2'
     : loading.lstm   ? 'lstm'
     : null
@@ -86,7 +75,6 @@ function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, 
   useEffect(() => {
     if (!activePhase) { setElapsed(0); return }
     const startRef = activePhase === 'p1'     ? p1StartRef
-      : activePhase === 'xgb'    ? xgbStartRef
       : activePhase === 'nbeats' ? nbeatsStartRef
       : activePhase === 'p2'     ? p2StartRef
       : lstmStartRef
@@ -94,12 +82,11 @@ function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, 
     tick()
     const id = setInterval(tick, 500)
     return () => clearInterval(id)
-  }, [activePhase, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef])
+  }, [activePhase, p1StartRef, nbeatsStartRef, p2StartRef, lstmStartRef])
 
   if (!activePhase) return null
 
   const estMs = activePhase === 'p1'     ? PHASE1_EST_MS
-    : activePhase === 'xgb'    ? XGB_EST_MS
     : activePhase === 'nbeats' ? NBEATS_EST_MS
     : activePhase === 'p2'     ? PHASE2_EST_MS
     : LSTM_EST_MS
@@ -117,15 +104,13 @@ function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, 
   const color     = overrun ? '#ffd43b' : isBrowser ? 'var(--accent-green)' : 'var(--accent-blue)'
 
   const LABELS = {
-    p1:     'Phase 1 (server): XGBoost features · N-BEATS features · Factor Model',
-    xgb:    'Phase 1B (browser): XGBoost · 5 quantile ONNX models',
+    p1:     'Phase 1 (server): N-BEATS features · macro + insider provider fan-out',
     nbeats: 'Phase 1B (browser): N-BEATS · 12-period recursive · pure-JS weights',
-    p2:     'Phase 2 (server): Hidden Markov Model · Gaussian Process',
+    p2:     'Phase 2 (server): HMM · Gaussian Process · LSTM features · TimesFM 2.5',
     lstm:   'Phase 3 (browser): Attention-LSTM · TF.js MC Dropout',
   }
   const GRADIENTS = {
     p1:     'linear-gradient(90deg, var(--accent-blue), #00d4aa)',
-    xgb:    'linear-gradient(90deg, #4a9eff, #00d4aa)',
     nbeats: 'linear-gradient(90deg, #ffd43b, #00d4aa)',
     p2:     overrun ? 'linear-gradient(90deg, #ffd43b, #ff6b35)' : 'linear-gradient(90deg, var(--accent-blue), #a855f7)',
     lstm:   'linear-gradient(90deg, #ff4757, #a855f7)',
@@ -156,7 +141,7 @@ function EtaBar({ loading, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, 
 export default function ForecastPanel({ backtest, portfolio, forecast }) {
   // `forecast` is hoisted to SplitView so in-flight Phase 1/2 state survives
   // a Results⇄Forecast tab switch (the panel itself unmounts on switch).
-  const { results, meta, loading, error, run, hasData, newsContext, edgarContext, p1StartRef, xgbStartRef, nbeatsStartRef, p2StartRef, lstmStartRef } = forecast
+  const { results, meta, loading, error, run, hasData, newsContext, edgarContext, p1StartRef, nbeatsStartRef, p2StartRef, lstmStartRef } = forecast
 
   const [ensemble, setEnsemble] = useState(null)
 
@@ -174,7 +159,7 @@ export default function ForecastPanel({ backtest, portfolio, forecast }) {
     return () => { cancelled = true }
   }, [results, regimeProbs, serverWeights])
 
-  const isRunning = loading.phase1 || loading.xgb || loading.nbeats || loading.phase2 || loading.lstm
+  const isRunning = loading.phase1 || loading.nbeats || loading.phase2 || loading.lstm
 
   // Last historical portfolio value — anchor for projecting actual dollar values
   const lastValue = backtest?.equity_curve?.at(-1)?.value ?? null
@@ -196,7 +181,7 @@ export default function ForecastPanel({ backtest, portfolio, forecast }) {
             <h2 className="mono font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
               ◈ FORECAST
               <span className="ml-2 font-normal text-xs" style={{ color: 'var(--text-secondary)' }}>
-                · Next 3 months · 6 research-backed methods
+                · Next 3 months · 5 research-backed methods
               </span>
             </h2>
             <p className="mono text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>
@@ -242,7 +227,6 @@ export default function ForecastPanel({ backtest, portfolio, forecast }) {
           <EtaBar
             loading={loading}
             p1StartRef={p1StartRef}
-            xgbStartRef={xgbStartRef}
             nbeatsStartRef={nbeatsStartRef}
             p2StartRef={p2StartRef}
             lstmStartRef={lstmStartRef}
@@ -261,9 +245,9 @@ export default function ForecastPanel({ backtest, portfolio, forecast }) {
         {!hasData && !isRunning && (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <div className="mono text-4xl mb-4 opacity-20 select-none" style={{ color: 'var(--accent-blue)' }}>◈</div>
-            <p className="mono text-sm mb-1" style={{ color: 'var(--text-primary)' }}>6 probabilistic forecast methods</p>
+            <p className="mono text-sm mb-1" style={{ color: 'var(--text-primary)' }}>5 probabilistic forecast methods</p>
             <p className="text-xs max-w-sm" style={{ color: 'var(--text-secondary)' }}>
-              XGBoost · N-BEATS · Factor Model · HMM Regimes · VAR · Attention-LSTM
+              N-BEATS · TimesFM 2.5 · HMM Regimes · Gaussian Process · Attention-LSTM
             </p>
             <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
               All methods cite peer-reviewed research and use strict walk-forward out-of-sample testing.
@@ -322,7 +306,7 @@ export default function ForecastPanel({ backtest, portfolio, forecast }) {
           />
         )}
 
-        {/* Composite chart — all 6 method medians on one chart.
+        {/* Composite chart — all 4 method medians on one chart.
             Collapsed by default AND unmounted when closed: the chart draws
             ~2500 historical points × 7 lines, which is a serious render /
             SVG-node load that was making the page unresponsive on click. */}
@@ -332,6 +316,8 @@ export default function ForecastPanel({ backtest, portfolio, forecast }) {
               results={results}
               equityCurve={backtest?.equity_curve}
               forecastStart={meta?.forecast_start}
+              shadowStart={meta?.shadow_forecast_start}
+              shadowEnd={meta?.shadow_forecast_end}
               loading={loading.phase1}
               ensemble={ensemble}
             />
@@ -346,14 +332,13 @@ export default function ForecastPanel({ backtest, portfolio, forecast }) {
               const inPhase1 = PHASE1_METHODS.has(method)
               const inPhase2 = PHASE2_METHODS.has(method)
 
-              const isXgbBrowserLoading    = method === 'xgboost' && loading.xgb
-              const isNbeatsBrowserLoading = method === 'nbeats'  && loading.nbeats
-              const isLstmBrowserLoading   = method === 'lstm'    && loading.lstm
+              const isNbeatsBrowserLoading = method === 'nbeats' && loading.nbeats
+              const isLstmBrowserLoading   = method === 'lstm'   && loading.lstm
 
               if (!result && ((inPhase1 && loading.phase1) || (inPhase2 && loading.phase2))) {
                 return <div key={method} className="cv-auto"><LoadingCard method={method} /></div>
               }
-              if (isXgbBrowserLoading || isNbeatsBrowserLoading || isLstmBrowserLoading) {
+              if (isNbeatsBrowserLoading || isLstmBrowserLoading) {
                 return <div key={method} className="cv-auto"><LoadingCard method={method} browserCompute /></div>
               }
               if (!result) return null

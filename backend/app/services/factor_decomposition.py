@@ -22,7 +22,6 @@ Carhart, M.M. (1997). On persistence in mutual fund performance.
 Novy-Marx, R. (2013). The other side of value: The gross profitability premium.
   Journal of Financial Economics, 108(1), 1–28.
   https://doi.org/10.1016/j.jfineco.2013.01.003
-  [Establishes RMW / gross profitability as the canonical quality factor.]
 """
 
 from __future__ import annotations
@@ -34,15 +33,6 @@ from typing import Optional
 
 TRADING_DAYS = 252
 RISK_FREE_RATE = float(os.getenv("RISK_FREE_RATE", "0.05"))
-
-# ETF proxies used as fallback when Ken French data is unavailable
-_ETF_PROXIES = {
-    "market": "SPY",
-    "smb":    ["IWM", "IWB"],   # Russell 2000 minus Russell 1000
-    "hml":    ["IWD", "IWF"],   # Russell 1000 Value minus Growth
-    "rmw":    ["QUAL", "USMV"],  # Quality minus Min-Vol (profitability proxy)
-    "cma":    ["MTUM", "SPY"],   # Low investment proxy (inverse momentum)
-}
 
 
 def _ols(X: np.ndarray, y: np.ndarray) -> dict:
@@ -74,17 +64,11 @@ def _sig_stars(t: float) -> str:
 
 def _build_result(coeffs, t_stats, r_squared, n_obs,
                   factor_keys: list[str] | None = None) -> dict:
-    """
-    Build the result dict from OLS output.
-    factor_keys: ordered list of snake_case factor names (excluding alpha).
-    Defaults to the classic 5-factor set.
-    """
     if factor_keys is None:
         factor_keys = ["mkt_rf", "smb", "hml", "rmw", "cma"]
 
     result = {"r_squared": round(float(r_squared), 3), "n_obs": int(n_obs)}
 
-    # Index 0 is the intercept (alpha)
     alpha_daily = float(coeffs[0])
     alpha_t     = float(t_stats[0])
     result["alpha"]        = round(float((1 + alpha_daily) ** TRADING_DAYS - 1), 4)
@@ -94,24 +78,15 @@ def _build_result(coeffs, t_stats, r_squared, n_obs,
     for i, name in enumerate(factor_keys):
         val = float(coeffs[i + 1])
         t   = float(t_stats[i + 1])
-        result[name]                = round(val, 3)
-        result[f"{name}_t_stat"]    = round(t, 2)
-        result[f"{name}_stars"]     = _sig_stars(t)
+        result[name]             = round(val, 3)
+        result[f"{name}_t_stat"] = round(t, 2)
+        result[f"{name}_stars"]  = _sig_stars(t)
 
     result["factors_used"] = factor_keys
     return result
 
 
-# ── Primary: Ken French data library ─────────────────────────────────────────
-
 def _via_ken_french(returns: pd.Series) -> dict:
-    """
-    Primary path: fetch daily FF5 + Momentum from Ken French data library.
-
-    Momentum (UMD, Carhart 1997) is added to the regression when the daily
-    dataset is available. RMW serves as the quality/profitability factor
-    (Novy-Marx 2013). Falls back to 5-factor if momentum data is missing.
-    """
     import pandas_datareader.data as web
 
     start = returns.index[0].strftime("%Y-%m-%d")
@@ -122,9 +97,8 @@ def _via_ken_french(returns: pd.Series) -> dict:
         "famafrench",
         start=start,
         end=end,
-    )[0] / 100  # percent → decimal
+    )[0] / 100
 
-    # Momentum (UMD) — optional; 5-factor fallback if unavailable
     mom_col = None
     try:
         mom_raw = web.DataReader(
@@ -142,9 +116,6 @@ def _via_ken_french(returns: pd.Series) -> dict:
     if len(df) < 60:
         raise ValueError("Insufficient overlapping observations")
 
-    excess = df["R"] - df["RF"]
-
-    # Determine which factors to include
     use_mom = (mom_col is not None
                and "Mom" in df.columns
                and df["Mom"].notna().mean() > 0.9)
@@ -166,8 +137,6 @@ def _via_ken_french(returns: pd.Series) -> dict:
                          res["r_squared"], res["n_obs"], factor_keys)
 
 
-# ── Fallback: ETF proxies via yfinance ────────────────────────────────────────
-
 def _via_etf_proxies(returns: pd.Series) -> dict:
     from app.services.data_service import fetch_prices
 
@@ -183,7 +152,7 @@ def _via_etf_proxies(returns: pd.Series) -> dict:
     smb      = px_ret["IWM"]  - px_ret["IWB"]
     hml      = px_ret["IWD"]  - px_ret["IWF"]
     rmw      = px_ret["QUAL"] - px_ret["USMV"]
-    cma      = -(px_ret["MTUM"] - px_ret["SPY"])  # high momentum ≈ aggressive investors
+    cma      = -(px_ret["MTUM"] - px_ret["SPY"])
 
     factors = pd.DataFrame({"mkt_rf": mkt_rf, "smb": smb, "hml": hml, "rmw": rmw, "cma": cma})
     df = pd.DataFrame({"R": returns}).join(factors, how="inner").dropna()
@@ -205,8 +174,6 @@ def _via_etf_proxies(returns: pd.Series) -> dict:
     result["proxy_source"] = "etf_proxies"
     return result
 
-
-# ── Public entry point ────────────────────────────────────────────────────────
 
 def compute_ff5(portfolio_returns: pd.Series) -> Optional[dict]:
     """

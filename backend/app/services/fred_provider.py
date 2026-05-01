@@ -131,7 +131,6 @@ def download_macro_history(start: str, end: str) -> pd.DataFrame:
     Returns DataFrame with columns = feature names, business-day index.
 
     Fetch chain: fredapi → pandas_datareader → neutral constants.
-    Used by train_xgboost.py.
     """
     api_key = os.environ.get("FRED_API_KEY", "").strip()
     df      = None

@@ -18,13 +18,13 @@ router = APIRouter()
 @limiter.limit(FCST_LIMITS)
 async def run_forecast(request: Request, body: ForecastRequest):
     """
-    Run probabilistic 3-month portfolio forecasts using up to 6 methods.
+    Run probabilistic 3-month portfolio forecasts using up to 4 methods.
 
-    Methods: xgboost | nbeats | factor | hmm | var | lstm
+    Methods: nbeats | hmm | var | lstm
 
     Supports two-phase fetching from the frontend:
-      Phase 1: methods=["xgboost","nbeats","factor"]   → ~1-2s
-      Phase 2: methods=["hmm","var","lstm"]              → ~10-40s
+      Phase 1: methods=["nbeats"]          → ~1-2s
+      Phase 2: methods=["hmm","var","lstm"] → ~10-40s
 
     Returns a ForecastResponse where each method either has a forecast
     fan band or an error string (no method failure kills the endpoint).

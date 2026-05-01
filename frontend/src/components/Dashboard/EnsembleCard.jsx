@@ -37,8 +37,7 @@ const REGIME_LABELS = {
 }
 
 const METHOD_COLORS = {
-  xgboost: '#4a9eff', nbeats: '#ffd43b', hmm: '#a855f7',
-  factor: '#00d4aa', var: '#ff6b35', lstm: '#ff4757',
+  nbeats: '#ffd43b', timesfm: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757',
 }
 
 const DISAGREE_COLOR = { low: '#00d4aa', med: '#ffd43b', high: '#ff4757' }
@@ -152,7 +151,7 @@ function fmtDollar(v) {
   return `$${v.toFixed(0)}`
 }
 
-const ENSEMBLE_COLOR = '#c084fc'   // bright violet — distinct from all 6 base model colors
+const ENSEMBLE_COLOR = '#c084fc'   // bright violet — distinct from all 4 base model colors
 
 // ── Main card ─────────────────────────────────────────────────────────────────
 

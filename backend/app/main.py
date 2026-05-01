@@ -14,6 +14,7 @@ load_dotenv()
 
 from app.routers import chat, backtest, data, screen, unified, forecast, regime, ticker
 from app.services.price_store import init_db
+from app.services.timesfm_provider import load_timesfm as _load_timesfm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,6 +77,9 @@ async def lifespan(app: FastAPI):
     # Fire-and-forget: warm the price cache in the background.
     # Does not block startup; app serves requests while cache fills.
     asyncio.create_task(_warm_price_cache())
+    # Preload TimesFM 2.5 singleton so the first forecast request doesn't
+    # block in the thread pool waiting for a 200 MB model download.
+    asyncio.create_task(asyncio.to_thread(_load_timesfm))
     yield
     logger.info("Shutting down.")
 

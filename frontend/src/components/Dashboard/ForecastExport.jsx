@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 
-const METHOD_ORDER  = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
-const METHOD_LABELS = { xgboost: 'XGBoost', nbeats: 'N-BEATS', factor: 'Factor Model', hmm: 'HMM Regimes', var: 'Gaussian Process', lstm: 'Attention-LSTM' }
-const METHOD_COLORS = { xgboost: '#4a9eff', nbeats: '#ffd43b', factor: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757' }
+const METHOD_ORDER  = ['nbeats', 'timesfm', 'hmm', 'var', 'lstm']
+const METHOD_LABELS = { nbeats: 'N-BEATS', timesfm: 'TimesFM 2.5', hmm: 'HMM Regimes', var: 'Gaussian Process', lstm: 'Attention-LSTM' }
+const METHOD_COLORS = { nbeats: '#ffd43b', timesfm: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757' }
 
 const SNAPSHOT_HORIZONS = [
   { label: '1 week',   days: 5,  idx: 4 },
@@ -107,7 +107,7 @@ function buildHtmlReport({ portfolio, backtest, results, ensemble, meta }) {
           <div class="snapshot-label">${s.label}</div>
           <div class="snapshot-sub">${s.days} trading days</div>
         </div>
-        <div class="snapshot-active">n=${active}/6 active</div>
+        <div class="snapshot-active">n=${active}/5 active</div>
       </div>
       <div class="snapshot-headline" style="color:${headlineColor}">${fmtPct(p50, 2)}</div>
       <div class="snapshot-range">90% range: ${fmtPct(p5, 2)} … ${fmtPct(p95, 2)}</div>
@@ -187,9 +187,9 @@ ${weightNote}
 <div class="snapshots">${snapshotHtml}</div>
 
 <div class="footer">
-  <strong>Methodology.</strong> Snapshot horizons (5d / 21d / 63d) sit at or inside each model's training horizon:
-  XGBoost is capped at 21d (trained target). N-BEATS, Factor, HMM, GP and LSTM each cover the full 63-day forecast horizon natively.
-  Ensemble uses regime-conditional stacked weights (Wolpert 1992; Ang &amp; Timmermann 2012).
+  <strong>Methodology.</strong> Snapshot horizons (5d / 21d / 63d) sit within every model's training horizon.
+  N-BEATS, TimesFM 2.5, HMM, GP, and Attention-LSTM each cover the full 63-day forecast horizon natively.
+  Ensemble uses regime-conditional stacked weights (Wolpert 1992).
   All base models use walk-forward out-of-sample validation (Lopez de Prado 2018).
 </div>
 </body>

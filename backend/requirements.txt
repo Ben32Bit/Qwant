@@ -1,3 +1,4 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 setuptools>=70.0        # provides pkg_resources; required by statsmodels build on Python 3.12+
 psutil>=5.9.0           # RAM monitoring — /api/debug/memory endpoint
 fastapi==0.115.0
@@ -21,4 +22,9 @@ scikit-learn>=1.4.0    # Ledoit-Wolf covariance, MinMaxScaler for LSTM
 statsmodels>=0.14.0    # VAR — Sims (1980), Campbell et al. (2003)
 # tensorflow-cpu REMOVED — Attention-LSTM moved to browser (TF.js) in Phase 1
 # Model served from frontend/public/models/lstm/ as static Vercel asset (~400KB)
-# Saves ~450MB server RAM, keeping Railway free tier well under 512MB limit.
+# Saves ~450MB server RAM; Railway Hobby has 8 GB for TimesFM.
+# ── TimesFM 2.5 — always-warm server-side foundation model ────────────────────
+# CPU wheel from PyTorch index (~200 MB, avoids 2 GB CUDA build).
+# --extra-index-url at top of this file points to download.pytorch.org/whl/cpu.
+torch>=2.3.0
+transformers>=4.48.0   # TimesFm2_5ModelForPrediction added in 4.48+

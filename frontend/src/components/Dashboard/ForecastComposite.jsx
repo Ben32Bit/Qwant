@@ -5,13 +5,9 @@ import {
 } from 'recharts'
 import { AXIS_STYLE, GRID_STYLE, TOOLTIP_STYLE, CHART_COLORS } from '../../utils/chartConfig.js'
 
-const METHOD_ORDER  = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
-const METHOD_LABELS = { xgboost: 'XGBoost', nbeats: 'N-BEATS', factor: 'Factor', hmm: 'HMM', var: 'GP', lstm: 'LSTM' }
-const METHOD_COLORS = { xgboost: '#4a9eff', nbeats: '#ffd43b', factor: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757' }
-
-// Horizon caps drive the segmented "model count" strip + chart reference
-// lines. Kept in sync with HORIZON_CAPS_DAYS in useForecast.js.
-const HORIZON_CAPS_DAYS = { xgboost: 21, nbeats: 63 }
+const METHOD_ORDER  = ['nbeats', 'timesfm', 'hmm', 'var', 'lstm']
+const METHOD_LABELS = { nbeats: 'N-BEATS', timesfm: 'TimesFM', hmm: 'HMM', var: 'GP', lstm: 'LSTM' }
+const METHOD_COLORS = { nbeats: '#ffd43b', timesfm: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757' }
 
 // Y-axis: cumulative % return from the start of the user's backtest.
 // Historical and forecast are both expressed against the same anchor so the
@@ -79,36 +75,21 @@ function MethodStatusDots({ results }) {
 
 // ── Method effectiveness + ensemble weights ───────────────────────────────────
 
-// Extract a quality signal (0–1) from whatever OOS metric a method exposes.
-function methodQuality(result) {
-  const m = result?.metadata
-  if (!m) return null
-  if (m.oos_r2  != null) return Math.max(0, Math.min(1, (m.oos_r2 + 0.2) / 1.2))   // XGBoost
-  if (m.oos_mse != null) return Math.max(0, 1 - Math.min(1, m.oos_mse * 5))         // LSTM
-  if (m.regime_sanity != null) return m.regime_sanity ? 0.80 : 0.45                  // HMM
-  if (m.ljung_box_ok  != null) return m.ljung_box_ok  ? 0.75 : 0.40                  // VAR/GP
-  if (m.periods != null) return 0.70                                                  // N-BEATS heuristic
-  if (m.factor_r2 != null) return Math.max(0, Math.min(1, m.factor_r2))              // Factor
-  return null
-}
-
-function qualityLabel(q) {
-  if (q == null) return null
-  if (q >= 0.75) return { label: 'HIGH', color: 'var(--accent-green)' }
-  if (q >= 0.50) return { label: 'MED',  color: '#ffd43b' }
-  return          { label: 'LOW',  color: '#ff4757' }
+function oosR2Color(r2) {
+  if (r2 == null) return null
+  if (r2 >= 0.5)  return 'var(--accent-green)'
+  if (r2 >= 0.0)  return '#ffd43b'
+  return '#ff4757'
 }
 
 function MethodEffectivenessTable({ results, ensemble }) {
   const weights = ensemble?.weights ?? {}
   const rows = METHOD_ORDER
     .map(method => {
-      const r = (results ?? []).find(x => x.method === method)
-      const w = weights[method] ?? null
-      const q = methodQuality(r)
-      const ql = qualityLabel(q)
+      const r     = (results ?? []).find(x => x.method === method)
+      const w     = weights[method] ?? null
       const p50end = r?.forecast?.p50?.at(-1)
-      return { method, r, w, q, ql, p50end }
+      return { method, r, w, p50end }
     })
 
   if (!rows.length) return null
@@ -118,13 +99,15 @@ function MethodEffectivenessTable({ results, ensemble }) {
       <div className="grid" style={{ gridTemplateColumns: '1fr 120px 64px 72px', background: 'rgba(255,255,255,0.02)' }}>
         <div className="mono px-3 py-1.5" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>METHOD</div>
         <div className="mono px-3 py-1.5" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>ENSEMBLE WEIGHT</div>
-        <div className="mono px-3 py-1.5 text-center" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>OOS FIT</div>
+        <div className="mono px-3 py-1.5 text-center" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>OOS R²</div>
         <div className="mono px-3 py-1.5 text-right" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>3M MEDIAN</div>
       </div>
-      {rows.map(({ method, r, w, ql, p50end }) => {
-        const color = METHOD_COLORS[method]
-        const done  = r?.forecast != null
-        const err   = r?.error
+      {rows.map(({ method, r, w, p50end }) => {
+        const color   = METHOD_COLORS[method]
+        const done    = r?.forecast != null
+        const err     = r?.error
+        const r2      = r?.oos_r2 ?? null
+        const r2color = oosR2Color(r2)
         return (
           <div key={method} className="grid items-center"
             style={{ gridTemplateColumns: '1fr 120px 64px 72px', borderTop: '1px solid var(--border)', opacity: (!done && !err) ? 0.45 : 1 }}>
@@ -152,10 +135,12 @@ function MethodEffectivenessTable({ results, ensemble }) {
                 <span className="mono" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.4 }}>—</span>
               )}
             </div>
-            {/* OOS quality */}
+            {/* OOS R² from shadow holdout */}
             <div className="px-3 py-2 text-center">
-              {ql ? (
-                <span className="mono font-bold" style={{ fontSize: 9, color: ql.color }}>{ql.label}</span>
+              {r2 != null ? (
+                <span className="mono font-bold" style={{ fontSize: 9, color: r2color }}>
+                  {r2 >= 0 ? '+' : ''}{r2.toFixed(2)}
+                </span>
               ) : (
                 <span className="mono" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.4 }}>—</span>
               )}
@@ -176,7 +161,7 @@ function MethodEffectivenessTable({ results, ensemble }) {
       {Object.keys(weights).length > 0 && (
         <div className="px-3 py-1.5 flex items-center gap-1" style={{ borderTop: '1px solid var(--border)', background: 'rgba(74,158,255,0.04)' }}>
           <span className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)', opacity: 0.6 }}>
-            Weights: regime-conditional stacked ensemble (Wolpert 1992) · current regime drives allocation
+            OOS R² from 30-day shadow holdout · Weights: regime-conditional stacked ensemble (Wolpert 1992)
           </span>
         </div>
       )}
@@ -195,52 +180,6 @@ function MethodEffectivenessTable({ results, ensemble }) {
  * Forecast values are computed as:
  *   projected_value = last_historical_value × (1 + p50_pct_return / 100)
  */
-// Small footer strip visualising how the ensemble's active-model count
-// degrades past each horizon cap. Segments are proportional to the day
-// ranges; with a 63d horizon XGBoost covers 21/63 ≈ 33% of the axis.
-function EnsembleDegradationStrip({ capDates, forecastHorizon }) {
-  if (!forecastHorizon) return null
-  const segs = [
-    { label: '6 models', end: HORIZON_CAPS_DAYS.xgboost, tone: 'var(--accent-green)' },
-    { label: '5 models', end: HORIZON_CAPS_DAYS.nbeats,  tone: '#ffd43b' },
-    { label: '4 models', end: forecastHorizon,           tone: '#ff6b35' },
-  ]
-  let prevEnd = 0
-  return (
-    <div className="mt-2">
-      <div className="flex items-center gap-1 mb-1">
-        <span className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)', opacity: 0.6 }}>
-          ENSEMBLE ACTIVE MODELS
-        </span>
-        <span className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)', opacity: 0.4 }}>
-          · degrades as short-horizon models hit their training cap
-        </span>
-      </div>
-      <div className="flex items-stretch rounded overflow-hidden" style={{ height: 14, border: '1px solid var(--border)' }}>
-        {segs.map((s, i) => {
-          const span = Math.max(0, s.end - prevEnd)
-          const pct  = (span / forecastHorizon) * 100
-          prevEnd = s.end
-          if (pct < 1) return null
-          return (
-            <div key={i} className="flex items-center justify-center mono"
-              style={{ width: `${pct}%`, background: `${s.tone}22`, borderRight: i < segs.length - 1 ? `1px solid ${s.tone}` : 'none', fontSize: 8, color: s.tone, fontWeight: 700 }}
-              title={`${s.label}, up to day ${s.end} (${capDates[i] ?? '—'})`}>
-              {pct > 12 ? s.label : s.label.split(' ')[0]}
-            </div>
-          )
-        })}
-      </div>
-      <div className="flex mono" style={{ fontSize: 8, color: 'var(--text-secondary)', opacity: 0.5, marginTop: 2 }}>
-        <span style={{ width: `${(HORIZON_CAPS_DAYS.xgboost / forecastHorizon) * 100}%` }}>0d</span>
-        <span style={{ width: `${((HORIZON_CAPS_DAYS.nbeats - HORIZON_CAPS_DAYS.xgboost) / forecastHorizon) * 100}%` }}>{HORIZON_CAPS_DAYS.xgboost}d</span>
-        <span style={{ flex: 1 }}>{HORIZON_CAPS_DAYS.nbeats}d</span>
-        <span style={{ textAlign: 'right' }}>{forecastHorizon}d</span>
-      </div>
-    </div>
-  )
-}
-
 // Cap historical points drawn into the chart. A 10-year backtest has ~2500
 // daily points; times 7 lines that's ~17.5k SVG nodes which was making the
 // page stall on click/hover. Uniform stride keeps the shape of the curve.
@@ -257,7 +196,9 @@ function downsampleHistorical(equityCurve) {
   return out
 }
 
-function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, ensemble }) {
+const SHADOW_METHODS = ['hmm', 'var', 'timesfm']
+
+function ForecastCompositeImpl({ results, equityCurve, forecastStart, shadowStart, shadowEnd, loading, ensemble }) {
   const chartData = useMemo(() => {
     if (!equityCurve?.length) return []
 
@@ -268,10 +209,45 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
     const lastValue  = equityCurve[equityCurve.length - 1].value
     const toPct      = v => (v / firstValue - 1) * 100
 
-    const historical = downsampleHistorical(equityCurve).map(pt => ({
+    // Build a date→value lookup for the full (non-downsampled) equity curve.
+    // Used to (a) provide Portfolio values for shadow-window rows that were
+    // skipped by downsampling, and (b) find the shadow anchor value.
+    const equityByDate = {}
+    for (const pt of equityCurve) equityByDate[pt.date] = pt.value
+
+    // Shadow anchor: last equity value strictly before shadowStart.
+    let shadowAnchorValue = lastValue
+    if (shadowStart) {
+      for (const pt of equityCurve) {
+        if (pt.date < shadowStart) shadowAnchorValue = pt.value
+      }
+    }
+    const projectFromShadow = pct50 => toPct(shadowAnchorValue * (1 + pct50 / 100))
+
+    // Build historical rows (downsampled). We then merge in any shadow dates
+    // that downsampling dropped so the shadow lines render without gaps.
+    const historicalRows = downsampleHistorical(equityCurve).map(pt => ({
       date:      pt.date,
       Portfolio: toPct(pt.value),
     }))
+    const historicalMap = {}
+    for (const row of historicalRows) historicalMap[row.date] = row
+
+    // Add shadow projections into historical rows.
+    for (const r of (results ?? [])) {
+      if (!r.shadow_band?.dates?.length) continue
+      const key = `${r.method}_shadow`
+      r.shadow_band.dates.forEach((d, i) => {
+        if (!historicalMap[d]) {
+          // Inject a row the downsampler skipped, filling Portfolio from lookup.
+          const actual = equityByDate[d]
+          historicalMap[d] = { date: d, Portfolio: actual != null ? toPct(actual) : null }
+        }
+        historicalMap[d][key] = projectFromShadow(r.shadow_band.p50[i] ?? 0)
+      })
+    }
+
+    const mergedHistorical = Object.values(historicalMap).sort((a, b) => a.date.localeCompare(b.date))
 
     // Each method's p50[i] is cumulative % return from forecast start, so
     // projected_value = lastValue × (1 + p50/100), then re-anchor to start.
@@ -296,8 +272,8 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
     }
 
     const forecastRows = Object.values(forecastByDate).sort((a, b) => a.date.localeCompare(b.date))
-    return [...historical, ...forecastRows]
-  }, [equityCurve, results, ensemble])
+    return [...mergedHistorical, ...forecastRows]
+  }, [equityCurve, results, ensemble, shadowStart])
 
   // ── Zoom slider state ────────────────────────────────────────────────────
   // The user can drag the start of the visible window forward; the right edge
@@ -329,24 +305,6 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
 
   const activeResults = (results ?? []).filter(r => r.forecast)
 
-  // Longest available forecast-date array — used to resolve cap-day offsets
-  // into calendar dates for the ReferenceLines and to size the degradation
-  // strip proportionally.
-  const forecastDates = useMemo(() => {
-    const longest = (results ?? [])
-      .map(r => r.forecast?.dates)
-      .filter(d => d?.length)
-      .reduce((a, b) => (a && a.length >= b.length ? a : b), null)
-    return longest ?? ensemble?.band?.dates ?? []
-  }, [results, ensemble])
-
-  const forecastHorizon = forecastDates.length
-  const capDates = [
-    forecastDates[HORIZON_CAPS_DAYS.xgboost - 1],
-    forecastDates[HORIZON_CAPS_DAYS.nbeats  - 1],
-    forecastDates[forecastDates.length - 1],
-  ]
-
   if (loading && !activeResults.length) {
     return (
       <div className="rounded-lg border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', height: 280 }}>
@@ -370,10 +328,10 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
           </h3>
           <div className="flex items-center gap-2">
             <MethodStatusDots results={results} />
-            {activeResults.length === 6 && (
+            {activeResults.length === 5 && (
               <span className="mono text-xs px-2 py-0.5 rounded"
                 style={{ background: 'rgba(0,212,170,0.1)', border: '1px solid rgba(0,212,170,0.3)', color: 'var(--accent-green)' }}>
-                all 6 ✓
+                all 5 ✓
               </span>
             )}
           </div>
@@ -399,6 +357,24 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
             tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`}
             width={50}
           />
+          {/* Shadow holdout window markers (T-60 and T-30) */}
+          {shadowStart && (
+            <ReferenceLine
+              x={shadowStart}
+              stroke="rgba(255,255,255,0.12)"
+              strokeDasharray="2 5"
+              strokeWidth={1}
+              label={{ value: 'Shadow', position: 'insideTopLeft', fontSize: 8, fill: 'rgba(255,255,255,0.18)', fontFamily: 'monospace' }}
+            />
+          )}
+          {shadowEnd && (
+            <ReferenceLine
+              x={shadowEnd}
+              stroke="rgba(255,255,255,0.12)"
+              strokeDasharray="2 5"
+              strokeWidth={1}
+            />
+          )}
           {forecastStart && (
             <ReferenceLine
               x={forecastStart}
@@ -406,27 +382,6 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
               strokeDasharray="4 4"
               strokeWidth={1}
               label={{ value: 'Forecast', position: 'insideTopRight', fontSize: 9, fill: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}
-            />
-          )}
-          {/* Cap markers — XGBoost (21d) and N-BEATS (63d) — so users can
-              see exactly where each short-horizon model drops out and the
-              ensemble downshifts to fewer contributors. */}
-          {capDates[0] && (
-            <ReferenceLine
-              x={capDates[0]}
-              stroke="rgba(74,158,255,0.35)"
-              strokeDasharray="2 3"
-              strokeWidth={1}
-              label={{ value: 'n→5 · 21d', position: 'insideTopLeft', fontSize: 8, fill: 'rgba(74,158,255,0.7)', fontFamily: 'monospace' }}
-            />
-          )}
-          {capDates[1] && (
-            <ReferenceLine
-              x={capDates[1]}
-              stroke="rgba(255,212,59,0.35)"
-              strokeDasharray="2 3"
-              strokeWidth={1}
-              label={{ value: 'n→4 · 63d', position: 'insideTopLeft', fontSize: 8, fill: 'rgba(255,212,59,0.7)', fontFamily: 'monospace' }}
             />
           )}
           <Tooltip content={<CompositeTooltip />} />
@@ -446,6 +401,30 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
             dot={false}
             isAnimationActive={false}
           />
+
+          {/* Shadow lines — dashed, low opacity, in the historical window.
+              Each server-side method's shadow p50 is plotted so users can
+              visually compare the model's holdout prediction vs actual. */}
+          {SHADOW_METHODS.map(method => {
+            const r = (results ?? []).find(x => x.method === method)
+            if (!r?.shadow_band) return null
+            return (
+              <Line
+                key={`${method}_shadow`}
+                type="monotone"
+                dataKey={`${method}_shadow`}
+                name={`${METHOD_LABELS[method]} (shadow)`}
+                stroke={METHOD_COLORS[method]}
+                strokeWidth={1}
+                strokeOpacity={0.30}
+                strokeDasharray="3 4"
+                dot={false}
+                isAnimationActive={false}
+                connectNulls={false}
+                legendType="none"
+              />
+            )
+          })}
 
           {/* One median projection line per method */}
           {METHOD_ORDER.map(method => {
@@ -527,7 +506,6 @@ function ForecastCompositeImpl({ results, equityCurve, forecastStart, loading, e
         </div>
       )}
 
-      <EnsembleDegradationStrip capDates={capDates} forecastHorizon={forecastHorizon} />
     </div>
   )
 }
@@ -536,6 +514,8 @@ export default memo(ForecastCompositeImpl, (prev, next) =>
   prev.results === next.results &&
   prev.equityCurve === next.equityCurve &&
   prev.forecastStart === next.forecastStart &&
+  prev.shadowStart === next.shadowStart &&
+  prev.shadowEnd === next.shadowEnd &&
   prev.loading === next.loading &&
   prev.ensemble === next.ensemble
 )

@@ -1,5 +1,5 @@
 """
-Forecast Engine — 6 Research-Backed Portfolio Forecasting Methods
+Forecast Engine — 4 Research-Backed Portfolio Forecasting Methods
 =================================================================
 
 All methods produce 3-month (63-trading-day) probabilistic forecasts as
@@ -57,37 +57,29 @@ logger = logging.getLogger(__name__)
 
 TRADING_DAYS = 252
 
-# Consensus long-run factor premia (annualised).
-# Sources: French data library historical averages + Damodaran (2024 estimate).
-# Fama, E.F. & French, K.R. (2015). Journal of Financial Economics, 116(1), 1–22.
-# Damodaran, A. (2024). Equity Risk Premiums: Determinants, Estimation and
-#   Implications. NYU Stern Working Paper.
-FACTOR_PREMIA = {
-    "mkt_rf": 0.053,   # Market excess return (Damodaran 2024 US ERP)
-    "smb":    0.020,   # Size premium (Fama & French 1993)
-    "hml":    0.035,   # Value premium
-    "rmw":    0.035,   # Profitability / quality premium (Novy-Marx 2013)
-    "cma":    0.025,   # Investment premium
-    "mom":    0.038,   # Momentum premium (Carhart 1997; Asness, Moskowitz & Pedersen 2013)
-}
+# Shadow (OOS) holdout window — shared across all server-side methods so the
+# evaluation regime is apples-to-apples (Phase C of forecastupgrade.md).
+# Every method trains on [start, T−SHADOW_DAYS] and forecasts SHADOW_HORIZON
+# days forward; the predicted p50 is compared against actual prices to get OOS R².
+SHADOW_DAYS    = 60   # hold out the last 60 trading days
+SHADOW_HORIZON = 30   # shadow forecast covers the first 30 of those days
+MIN_SHADOW_HISTORY = 90  # minimum history before shadow cutoff to be meaningful
 
 # Method colours for the frontend
 METHOD_COLORS = {
-    "xgboost":     "#4a9eff",   # blue  (replaced Monte Carlo GBM)
-    "nbeats":      "#ffd43b",   # amber  (replaced GARCH(1,1))
-    "hmm":         "#a855f7",   # purple
-    "factor":      "#00d4aa",   # teal
-    "var":         "#ff6b35",   # orange  (now GP)
-    "lstm":        "#ff4757",   # red
+    "nbeats":   "#ffd43b",   # amber
+    "hmm":      "#a855f7",   # purple
+    "var":      "#ff6b35",   # orange (GP)
+    "lstm":     "#ff4757",   # red
+    "timesfm":  "#00d4aa",   # green (freed from Factor model)
 }
 
 METHOD_LABELS = {
-    "xgboost":     "XGBoost Quantile",
-    "nbeats":      "N-BEATS Neural",
-    "hmm":         "Hidden Markov Model",
-    "factor":      "Factor Model (FF5+Mom)",
-    "var":         "Gaussian Process (GP)",
-    "lstm":        "LSTM Neural Net",
+    "nbeats":   "N-BEATS Neural",
+    "hmm":      "Hidden Markov Model",
+    "var":      "Gaussian Process (GP)",
+    "lstm":     "LSTM Neural Net",
+    "timesfm":  "TimesFM 2.5 (Google)",
 }
 
 
@@ -139,177 +131,43 @@ def _ledoit_wolf_cov(returns_df: pd.DataFrame) -> np.ndarray:
     return lw.covariance_ * TRADING_DAYS   # annualise
 
 
-# ── 1. XGBoost Quantile — Client-Side Feature Preparation ────────────────────
-#
-# XGBoost gradient-boosted quantile regressors now replace Monte Carlo GBM.
-# GBM assumes a random walk with constant μ and σ — it cannot learn from
-# momentum, vol regimes, or cross-sectional patterns. XGBoost, by contrast,
-# learns nonlinear interactions between 9 market microstructure features.
-#
-# Reference: Gu, Kelly & Xiu (2020, RFS) — XGBoost dominates all parametric
-# models on OOS stock return prediction across 900+ firm characteristics.
-#
-# Like the Attention-LSTM, the XGBoost models run CLIENT-SIDE via ONNX
-# Runtime Web. The server's role is ONLY feature engineering.
-#
-# Training script:  backend/scripts/train_xgboost.py
-# ONNX models:      frontend/public/models/xgboost/q{05,25,50,75,95}.onnx
-#
-# The ONNX models include StandardScaler as preprocessing nodes (Pipeline →
-# ONNX), so XGBoostInferer.js passes raw unscaled features directly.
-#
-# Fan chart extrapolation (client-side, 21d → 63d):
-#   The models predict 21-day cumulative return distributions.
-#   For the 63-day chart, the client scales the 21-day bands using:
-#     median(t) = (1 + p50_21d)^(t/21) − 1
-#     spread(t) = half_spread_21d × sqrt(t/21)   [i.i.d. scaling]
-#
-# References
-# ----------
-# Chen, T. & Guestrin, C. (2016). XGBoost: A Scalable Tree Boosting System.
-#   KDD '16. https://doi.org/10.1145/2939672.2939785
-# Gu, S., Kelly, B., & Xiu, D. (2020). Empirical Asset Pricing via Machine
-#   Learning. Review of Financial Studies, 33(5), 2223–2273.
-#   https://doi.org/10.1093/rfs/hhaa009
-# Friedman, J.H. (2001). Greedy function approximation: a gradient boosting
-#   machine. Annals of Statistics, 29(5), 1189–1232.
-#   https://doi.org/10.1214/aos/1013203451
-# López de Prado, M. (2018). Advances in Financial Machine Learning, Ch. 7.
+# ── OOS R² computation ────────────────────────────────────────────────────────
 
-def prepare_xgboost_features(
-    returns: pd.Series,
-    horizon: int,
-    last_date: str,
-) -> dict:
+def _compute_oos_r2(shadow_band: dict, actual_returns: "pd.Series") -> Optional[float]:
     """
-    Compute 14 raw (unscaled) predictive features from the portfolio return series
-    plus live macro/VIX data from FRED and yfinance.
+    Out-of-sample R² of the shadow forecast p50 vs actual portfolio returns
+    in the holdout window [T−SHADOW_DAYS, T−SHADOW_DAYS+SHADOW_HORIZON].
 
-    The ONNX Pipeline includes StandardScaler, so the client passes raw values.
+    Both series are expressed as cumulative % return from the shadow training
+    end so scale differences between portfolios don't affect the metric.
 
-    Price features (9)
-    ------------------
-    ret_1d, ret_5d, ret_21d, ret_63d : multi-horizon momentum
-    vol_21d, vol_63d                  : realized vol (annualised)
-    mom_12_1                          : 12-month minus 1-month momentum
-    rsi_14                            : 14-day RSI (range 0–1)
-    vol_ratio                         : vol_21d / vol_63d (vol regime)
-
-    Macro features (5)
-    ------------------
-    yield_curve_10y2y : 10Y-2Y Treasury spread (recession/expansion)
-    credit_spread_baa : BAA-10Y credit spread  (risk-off proxy)
-    vix_pct_rank      : VIX percentile rank vs 2Y history (0–1)
-    vix_term_slope    : VIX3M/VIX − 1 (contango = bullish)
-    real_yield_10y    : 10Y TIPS yield (financial conditions tightness)
-
-    Falls back gracefully: if FRED/VIX are unavailable, neutral historical
-    averages are appended instead so inference always returns a result.
-
-    Note: retrain the ONNX models via scripts/train_xgboost.py whenever
-    the feature list changes. The meta.json n_features field is the
-    authoritative feature count — the client uses it for tensor shape.
+    Returns None if there is insufficient data or a numerical error occurs.
     """
-    MIN_OBS = 63
-    if len(returns) < MIN_OBS:
-        raise ValueError(
-            f"Insufficient history for XGBoost: need ≥{MIN_OBS} trading days, "
-            f"got {len(returns)}. Try a longer backtest date range."
-        )
-
-    r = returns.copy()
-    n = len(r)
-
-    # ── Price features ────────────────────────────────────────────────────────
-    ret_1d  = float(r.iloc[-1])
-    ret_5d  = float(r.iloc[-5:].sum())
-    ret_21d = float(r.iloc[-21:].sum())
-    ret_63d = float(r.iloc[-63:].sum())
-
-    vol_21d = float(r.iloc[-21:].std() * np.sqrt(TRADING_DAYS))
-    vol_63d = float(r.iloc[-63:].std() * np.sqrt(TRADING_DAYS))
-
-    if n >= TRADING_DAYS:
-        mom_12_1 = float(r.iloc[-TRADING_DAYS:-21].sum())
-    elif n >= 42:
-        mom_12_1 = float(r.iloc[:-21].sum())
-    else:
-        mom_12_1 = 0.0
-
-    delta  = r.diff().dropna()
-    gain   = delta.clip(lower=0).rolling(14).mean()
-    loss   = (-delta.clip(upper=0)).rolling(14).mean()
-    rsi_14 = float(gain.iloc[-1] / (gain.iloc[-1] + loss.iloc[-1] + 1e-9))
-
-    vol_ratio = vol_21d / (vol_63d + 1e-9)
-
-    price_features = [ret_1d, ret_5d, ret_21d, ret_63d,
-                      vol_21d, vol_63d, mom_12_1, rsi_14, vol_ratio]
-
-    # ── Macro features ────────────────────────────────────────────────────────
-    macro_available = False
     try:
-        from .fred_provider import get_macro_features
-        from .vix_provider  import get_vix_features
+        n = min(SHADOW_HORIZON,
+                len(actual_returns),
+                len(shadow_band.get("p50", [])))
+        if n < 5:
+            return None
+        # Actual cumulative % return over the holdout window
+        actual_cum = (np.cumprod(1.0 + actual_returns.values[:n]) - 1.0) * 100.0
+        shadow_p50 = np.array(shadow_band["p50"][:n], dtype=float)
 
-        fred = get_macro_features(as_of_date=last_date)
-        vix  = get_vix_features(as_of_date=last_date)
-        macro_available = fred.get("available", False) or vix.get("available", False)
-
-        macro_features = [
-            fred["yield_curve_10y2y"],
-            fred["credit_spread_baa"],
-            vix["vix_pct_rank"],
-            vix["vix_term_slope"],
-            fred["real_yield_10y"],
-        ]
-        macro_context = {
-            "vix_spot":             vix.get("vix_spot"),
-            "vix_pct_rank":         vix.get("vix_pct_rank"),
-            "vix_term_slope":       vix.get("vix_term_slope"),
-            "vix_contango":         vix.get("vix_contango"),
-            "yield_curve_10y2y":    fred.get("yield_curve_10y2y"),
-            "credit_spread_baa":    fred.get("credit_spread_baa"),
-            "real_yield_10y":       fred.get("real_yield_10y"),
-            "yield_curve_pct_rank": fred.get("yield_curve_pct_rank"),
-            "credit_pct_rank":      fred.get("credit_pct_rank"),
-            "macro_available":      macro_available,
-        }
-    except Exception as exc:
-        logger.warning("prepare_xgboost_features: macro fetch failed (%s) — using neutrals", exc)
-        macro_features = [0.60, 2.20, 0.50, 0.05, 0.50]   # long-run neutral values
-        macro_context  = {"macro_available": False}
-
-    features = price_features + macro_features
-    feature_names = [
-        "ret_1d", "ret_5d", "ret_21d", "ret_63d",
-        "vol_21d", "vol_63d", "mom_12_1", "rsi_14", "vol_ratio",
-        "yield_curve_10y2y", "credit_spread_baa",
-        "vix_pct_rank", "vix_term_slope", "real_yield_10y",
-    ]
-
-    return {
-        "features":       features,
-        "feature_names":  feature_names,
-        "forecast_dates": _forecast_dates(last_date, horizon),
-        # Display metadata for the card
-        "ret_21d_ann":    round(ret_21d * (TRADING_DAYS / 21), 4),
-        "vol_21d_ann":    round(vol_21d, 4),
-        "rsi_14":         round(rsi_14, 3),
-        "vol_regime":     "high" if vol_ratio > 1.2 else "low" if vol_ratio < 0.8 else "normal",
-        "n_obs":          n,
-        "macro_context":  macro_context,
-    }
+        ss_res = float(np.sum((actual_cum - shadow_p50) ** 2))
+        ss_tot = float(np.sum((actual_cum - actual_cum.mean()) ** 2))
+        return round(1.0 - ss_res / ss_tot, 4) if ss_tot > 1e-10 else 0.0
+    except Exception:
+        return None
 
 
-# ── 2. N-BEATS — Client-Side Feature Preparation ─────────────────────────────
+# ── 1. N-BEATS — Client-Side Feature Preparation ─────────────────────────────
 #
 # N-BEATS (Neural Basis Expansion Analysis) replaces GARCH(1,1).
 # GARCH forecasts conditional variance only and assumes returns are Gaussian.
 # N-BEATS provides multi-horizon interpretable return forecasts via stacked
 # residual MLP blocks; each block backcasts what it "explains" from the input.
 #
-# Like XGBoost and Attention-LSTM, N-BEATS runs CLIENT-SIDE via ONNX Runtime Web.
+# Like the Attention-LSTM, N-BEATS runs CLIENT-SIDE via the browser.
 # The server returns only the last 30 days of returns (the input window).
 #
 # Training script:  backend/scripts/train_nbeats.py
@@ -375,7 +233,7 @@ def prepare_nbeats_features(
     }
 
 
-# ── 3. Hidden Markov Model — Regime-Conditional ───────────────────────────────
+# ── 2. Hidden Markov Model — Regime-Conditional ───────────────────────────────
 
 def forecast_hmm(
     returns: pd.Series,
@@ -458,6 +316,14 @@ def forecast_hmm(
     # Validate out-of-sample: Bull μ > Bear μ (economic sanity)
     oos_sane = bool(means[bull] > means[bear])
 
+    # In-sample R²: posterior expected return vs actual over full history.
+    # Measures how well the 2-state mean structure fits the training data.
+    pred_is  = float(means[bull]) * post[:, bull] + float(means[bear]) * post[:, bear]
+    actual_is = returns.values
+    ss_res_is = float(np.sum((actual_is - pred_is) ** 2))
+    ss_tot_is = float(np.sum((actual_is - actual_is.mean()) ** 2))
+    is_r2 = round(1.0 - ss_res_is / ss_tot_is, 4) if ss_tot_is > 1e-10 else None
+
     # Simulate — vectorised: draw the full state trajectory, then draw
     # per-state returns in bulk. Saves ~250k Python-level iterations.
     rng    = np.random.default_rng()
@@ -479,6 +345,7 @@ def forecast_hmm(
     band  = _paths_to_band(paths, dates)
 
     meta: dict = {
+        "is_r2":                is_r2,
         "bull_state_mu_ann":    round(float(means[bull]) * TRADING_DAYS, 4),
         "bull_state_vol_ann":   round(float(stds[bull]) * np.sqrt(TRADING_DAYS), 4),
         "bear_state_mu_ann":    round(float(means[bear]) * TRADING_DAYS, 4),
@@ -545,132 +412,7 @@ def decorate_hmm_meta_with_macro(meta: dict, macro_context: dict) -> None:
     meta["credit_pct_rank"]    = round(cr_rank, 3)
 
 
-# ── 4. Fama-French Factor-Anchored Forecast ───────────────────────────────────
-
-def forecast_factor(
-    returns: pd.Series,
-    horizon: int,
-    n_paths: int,
-    last_date: str,
-    ff5: Optional[dict],
-    macro_context: Optional[dict] = None,
-) -> dict:
-    """
-    Factor-anchored GBM: replaces the naive historical mean with a
-    theoretically grounded expected return derived from FF5 loadings
-    and consensus long-run factor premia.
-
-    Expected return:
-        μ_FF5 = RF + β_mkt·E[Mkt-RF] + β_smb·E[SMB] + β_hml·E[HML]
-                   + β_rmw·E[RMW] + β_cma·E[CMA] + α
-
-    Simulation uses the idiosyncratic residual volatility (σ_ε from the
-    FF5 regression) as the noise term — capturing only the non-factor
-    variance and avoiding double-counting systematic risk already priced
-    into μ_FF5.
-
-    This approach is standard in institutional capital market assumptions
-    (BlackRock Investment Institute; Research Affiliates LLC).
-
-    References
-    ----------
-    Fama, E.F. & French, K.R. (2015). A five-factor asset pricing model.
-      Journal of Financial Economics, 116(1), 1–22.
-      https://doi.org/10.1016/j.jfineco.2014.10.010
-
-    Cochrane, J.H. (2011). Presidential address: Discount rates. Journal
-      of Finance, 66(4), 1047–1108.
-      https://doi.org/10.1111/j.1540-6261.2011.01671.x
-
-    Damodaran, A. (2024). Equity Risk Premiums: Determinants, Estimation
-      and Implications. NYU Stern Working Paper.
-      https://pages.stern.nyu.edu/~adamodar/
-
-    Out-of-sample note
-    ------------------
-    Factor premia are sourced from long-run out-of-sample academic consensus
-    (60+ year Ken French data) rather than in-sample historical means,
-    which dramatically reduces look-ahead bias for short backtests.
-    Bailey & Lopez de Prado (2014). Journal of Portfolio Management, 40(5).
-    """
-    t0 = time.time()
-
-    # If FF5 decomposition available, use its loadings; else fall back to
-    # naive historical mean (flagged in metadata)
-    # Macro cycle adjustment: inverted yield curve or wide credit spreads
-    # suppress the equity risk premium (Campbell & Cochrane 1999; Ludvigson & Ng 2009).
-    # Only mkt_rf is scaled — idiosyncratic factor premia are cycle-independent.
-    cycle_scale      = 1.0
-    macro_adjustment = None
-    if macro_context:
-        yc_rank = macro_context.get("yield_curve_pct_rank", 0.5)
-        cr_rank = macro_context.get("credit_pct_rank", 0.5)
-        if yc_rank < 0.15:
-            cycle_scale *= 0.70
-        elif yc_rank < 0.30:
-            cycle_scale *= 0.85
-        if cr_rank > 0.85:
-            cycle_scale *= 0.75
-        elif cr_rank > 0.70:
-            cycle_scale *= 0.87
-        if cycle_scale != 1.0:
-            macro_adjustment = {
-                "cycle_scale":      round(cycle_scale, 3),
-                "yc_pct_rank":      round(yc_rank, 3),
-                "credit_pct_rank":  round(cr_rank, 3),
-                "yield_curve_10y2y": round(macro_context.get("yield_curve_10y2y", 0.6), 3),
-            }
-
-    if ff5 and all(k in ff5 for k in ("mkt_rf", "smb", "hml", "rmw", "cma", "alpha")):
-        # Sum all factor contributions — includes Momentum (mom) if the
-        # decomposition was run via Ken French path (Phase 2C upgrade).
-        # RMW is the quality/profitability factor (Novy-Marx 2013).
-        mu_ann = 0.05  # risk-free anchor
-        for factor, premium in FACTOR_PREMIA.items():
-            beta  = ff5.get(factor, 0.0)
-            scale = cycle_scale if factor == "mkt_rf" else 1.0
-            mu_ann += beta * premium * scale
-        mu_ann += ff5.get("alpha", 0.0)
-
-        total_vol = float(returns.std() * np.sqrt(TRADING_DAYS))
-        r2        = ff5.get("r_squared", 0.0)
-        idio_vol  = total_vol * np.sqrt(max(1.0 - r2, 0.01))
-        factors_used = ff5.get("factors_used", ["mkt_rf","smb","hml","rmw","cma"])
-        source       = f"ff{len(factors_used)}"
-    else:
-        # Fallback: naive historical mean + full vol (no factor decomp)
-        mu_ann   = float(returns.mean() * TRADING_DAYS)
-        idio_vol = float(returns.std() * np.sqrt(TRADING_DAYS))
-        source   = "historical_fallback"
-
-    dt        = 1 / TRADING_DAYS
-    drift     = (mu_ann - 0.5 * idio_vol ** 2) * dt
-    diffusion = idio_vol * np.sqrt(dt)
-
-    Z     = np.random.standard_normal((horizon, n_paths))
-    paths = np.exp(np.cumsum(drift + diffusion * Z, axis=0)) - 1.0
-
-    dates = _forecast_dates(last_date, horizon)
-    band  = _paths_to_band(paths, dates)
-    return {
-        "band": band,
-        "metadata": {
-            "mu_factor_ann":    round(mu_ann, 4),
-            "mu_hist_ann":      round(float(returns.mean() * TRADING_DAYS), 4),
-            "idio_vol_ann":     round(idio_vol, 4),
-            "r_squared":        round(ff5.get("r_squared", 0.0) if ff5 else 0.0, 3),
-            "source":           source,
-            "n_factors":        len(ff5.get("factors_used", ["mkt_rf","smb","hml","rmw","cma"])) if ff5 else 1,
-            "mom_beta":         round(ff5.get("mom", 0.0), 3) if ff5 else None,
-            "rmw_beta":         round(ff5.get("rmw", 0.0), 3) if ff5 else None,
-            "factor_premia":    FACTOR_PREMIA,
-            "macro_adjustment": macro_adjustment,
-        },
-        "compute_ms": int((time.time() - t0) * 1000),
-    }
-
-
-# ── 5. Gaussian Process Autoregression (replaces VAR, Phase 2D) ──────────────
+# ── 3. Gaussian Process Autoregression (replaces VAR, Phase 2D) ──────────────
 #
 # VAR required individual asset return matrices and made stationarity +
 # multivariate normality assumptions. GP autoregression (GPAR) replaces it
@@ -767,14 +509,20 @@ def forecast_gp(
     )
     gp.fit(X_tr, y_tr)
 
-    # OOS diagnostics
+    # IS diagnostics (posterior mean on training set)
+    mu_tr_is  = gp.predict(X_tr)
+    ss_res_is = float(np.sum((y_tr - mu_tr_is) ** 2))
+    ss_tot_is = float(np.sum((y_tr - y_tr.mean()) ** 2))
+    is_r2 = round(1.0 - ss_res_is / ss_tot_is, 4) if ss_tot_is > 1e-10 else None
+
+    # OOS diagnostics (80/20 within-window split)
     oos_r2 = nlpd = None
     if len(y_val) > 1:
         mu_val, std_val = gp.predict(X_val, return_std=True)
         ss_res  = float(np.sum((y_val - mu_val) ** 2))
         ss_tot  = float(np.sum((y_val - y_val.mean()) ** 2))
         oos_r2  = round(1 - ss_res / ss_tot, 4) if ss_tot > 0 else None
-        # Negative log predictive density (calibration — lower = better)
+        # Negative log predictive density (calibration — lower is better)
         nlpd = round(float(np.mean(
             0.5 * np.log(2 * np.pi * std_val ** 2)
             + (y_val - mu_val) ** 2 / (2 * std_val ** 2 + 1e-10)
@@ -816,6 +564,7 @@ def forecast_gp(
     return {
         "band": band,
         "metadata": {
+            "is_r2":       is_r2,
             "oos_r2":      oos_r2,
             "nlpd":        nlpd,
             "lookback":    LOOKBACK,
@@ -827,7 +576,7 @@ def forecast_gp(
     }
 
 
-# ── 6. Attention-LSTM — Client-Side Feature Preparation ──────────────────────
+# ── 4. Attention-LSTM — Client-Side Feature Preparation ──────────────────────
 #
 # The Attention-LSTM now runs IN THE USER'S BROWSER via TensorFlow.js.
 # This eliminates the ~450MB tensorflow-cpu server RAM cost and keeps
@@ -996,6 +745,20 @@ def run_all_forecasts(req) -> dict:
     forecast_end   = forecast_dates[-1] if forecast_dates else last_date
     hist_end_val   = float(req.equity_curve[-1]["value"]) if req.equity_curve else 1.0
 
+    # ── Shadow (OOS) holdout setup ───────────────────────────────────────────
+    # Train on [start, T-SHADOW_DAYS], forecast SHADOW_HORIZON days forward,
+    # compare shadow p50 against actual prices → OOS R² per server-side method.
+    shadow_cutoff         = len(returns) - SHADOW_DAYS
+    can_shadow            = shadow_cutoff >= MIN_SHADOW_HISTORY
+    returns_shadow        = returns.iloc[:shadow_cutoff] if can_shadow else None
+    shadow_last_date      = returns_shadow.index[-1].strftime("%Y-%m-%d") if can_shadow else None
+    shadow_actual_returns = (
+        returns.iloc[shadow_cutoff: shadow_cutoff + SHADOW_HORIZON] if can_shadow else None
+    )
+    _shadow_dates = _forecast_dates(shadow_last_date, SHADOW_HORIZON) if can_shadow else []
+    shadow_forecast_start = _shadow_dates[0]  if _shadow_dates else None
+    shadow_forecast_end   = _shadow_dates[-1] if _shadow_dates else None
+
     # ── Data providers dispatched in parallel ───────────────────────────────────
     #
     # Previously these five providers (macro, insider, news, reddit, edgar) ran
@@ -1003,15 +766,13 @@ def run_all_forecasts(req) -> dict:
     # into 30-50s of sequential network I/O. They're all independent and
     # I/O-bound, so a single ThreadPoolExecutor fans them out for a ~5-10× win.
     #
-    # Phase 1 methods (xgboost / nbeats / factor) only use `returns` in the
-    # model math — tier-2 text providers (news / reddit / edgar) are purely
-    # display metadata for those methods and are skipped to keep Phase 1 at
-    # its advertised ~1-2s budget. They still run in Phase 2 where HMM / VAR
-    # / LSTM return the tier-2 context to the frontend for display.
+    # Phase 1 (nbeats) only uses `returns` — tier-2 text providers are skipped
+    # to keep Phase 1 at its advertised ~1-2s budget. They run in Phase 2 where
+    # HMM / GP / LSTM return the tier-2 context to the frontend for display.
     tickers = [a.ticker for a in req.assets] if req.assets else []
     weights = {a.ticker: a.weight for a in req.assets} if req.assets else {}
 
-    _PHASE2_SERVER_METHODS = {"hmm", "var", "lstm"}
+    _PHASE2_SERVER_METHODS = {"hmm", "var", "lstm", "timesfm"}
     is_phase2_request = any(m in _PHASE2_SERVER_METHODS for m in req.methods)
 
     macro_ctx:  dict = {}
@@ -1034,16 +795,38 @@ def run_all_forecasts(req) -> dict:
     # HMM is fitted with macro_context=None; the macro-regime labels are
     # back-filled into out["metadata"] once the macro future lands.
     _pending_futures: dict = {}
-    _server_pool = ThreadPoolExecutor(max_workers=2)
+    # 6 workers: up to 3 forward + 3 shadow running in parallel so Phase 2
+    # wall-clock doesn't grow — shadow fits overlap with forward fits.
+    _server_pool = ThreadPoolExecutor(max_workers=6)
     for _m in req.methods:
         if _m == "hmm":
             _pending_futures["hmm"] = _server_pool.submit(
                 forecast_hmm, returns, h, np_, last_date, None,
             )
+            if can_shadow:
+                # Use 500 MC paths for shadow (half of forward) — accuracy is
+                # sufficient for OOS R² and halves the simulation time.
+                _pending_futures["hmm_shadow"] = _server_pool.submit(
+                    forecast_hmm, returns_shadow, SHADOW_HORIZON, min(np_, 500),
+                    shadow_last_date, None,
+                )
         elif _m == "var":
             _pending_futures["var"] = _server_pool.submit(
                 forecast_gp, returns, h, last_date,
             )
+            if can_shadow:
+                _pending_futures["var_shadow"] = _server_pool.submit(
+                    forecast_gp, returns_shadow, SHADOW_HORIZON, shadow_last_date,
+                )
+        elif _m == "timesfm":
+            from app.services.timesfm_provider import forecast_timesfm
+            _pending_futures["timesfm"] = _server_pool.submit(
+                forecast_timesfm, returns, h, last_date,
+            )
+            if can_shadow:
+                _pending_futures["timesfm_shadow"] = _server_pool.submit(
+                    forecast_timesfm, returns_shadow, SHADOW_HORIZON, shadow_last_date,
+                )
 
     def _safe_macro():
         try:
@@ -1094,8 +877,7 @@ def run_all_forecasts(req) -> dict:
             logger.debug("EDGARFiling skipped: %s", exc)
             return {}
 
-    # Tier 1 always runs — macro is cached (cheap) and insider feeds xgboost
-    # metadata pills on both phases.
+    # Tier 1 always runs — macro is cached (cheap) and insider feeds method metadata.
     _provider_jobs = {
         "macro":   _safe_macro,
         "insider": _safe_insider,
@@ -1150,10 +932,10 @@ def run_all_forecasts(req) -> dict:
 
     _hmm_out_extras: dict = {}   # populated during HMM dispatch for regime/ensemble
 
-    # HMM / GP futures were already submitted up top so they overlap with the
-    # tier-2 provider fan-out. Macro context is back-filled onto HMM meta in
-    # the per-method loop below (forecast_hmm itself was called with None).
-    PHASE2_SERVER_METHODS = {"hmm", "var"}
+    # HMM / GP / TimesFM futures were already submitted up top so they overlap
+    # with the tier-2 provider fan-out. Macro context is back-filled onto HMM
+    # meta in the per-method loop below (forecast_hmm itself was called with None).
+    PHASE2_SERVER_METHODS = {"hmm", "var", "timesfm"}
 
     results = []
     for method in req.methods:
@@ -1161,24 +943,6 @@ def run_all_forecasts(req) -> dict:
         color = METHOD_COLORS.get(method, "#888888")
         try:
             # ── Client-side methods: server returns features only, no band ─────
-            if method == "xgboost":
-                out = prepare_xgboost_features(returns, h, last_date)
-                results.append(MethodResult(
-                    method=method, label=label, color=color,
-                    forecast=None,
-                    metadata={
-                        "client_side":     True,
-                        "xgb_features":    out,
-                        "model":           "HistGradientBoostingRegressor (sklearn)",
-                        "quantiles":       [0.05, 0.25, 0.50, 0.75, 0.95],
-                        "horizon_days":    21,
-                        "insider_context": insider,
-                        "reddit_context":  _portfolio_reddit(reddit_ctx, weights) or None,
-                        "news_article_count": news_ctx.get("portfolio_summary", {}).get("total_articles"),
-                    },
-                ))
-                continue
-
             if method == "nbeats":
                 out = prepare_nbeats_features(returns, h, last_date)
                 results.append(MethodResult(
@@ -1210,13 +974,16 @@ def run_all_forecasts(req) -> dict:
                 continue
 
             # ── Legacy/removed methods ───────────────────────────────────────────
-            if method in ("monte_carlo", "garch"):
+            if method in ("monte_carlo", "garch", "xgboost", "factor"):
                 raise ValueError(
                     f"Method '{method}' was removed. "
-                    "Use 'xgboost' (replaced monte_carlo) or 'nbeats' (replaced garch)."
+                    "Supported methods: nbeats | hmm | var | lstm"
                 )
 
             # ── Server-side methods: compute band directly ─────────────────────
+            shadow_band_obj = None
+            oos_r2_val      = None
+
             if method == "hmm":
                 # 45 s cap — HMM fit on Railway's shared CPU runs ~10 s per
                 # restart and is the wall-clock bottleneck of Phase 2.
@@ -1227,23 +994,25 @@ def run_all_forecasts(req) -> dict:
                     decorate_hmm_meta_with_macro(out["metadata"], macro_ctx)
                 if news_ctx:
                     out["metadata"]["news_article_count"] = news_ctx.get("portfolio_summary", {}).get("total_articles")
-                # Phase 5A: 4-state regime classification after HMM (non-fatal)
+                # 4-state regime classification — surfaced for UI display only;
+                # ensemble weighting is now driven by OOS R² (computed after loop).
                 try:
-                    from .meta_learner import compute_regime_probs, get_ensemble_weights
+                    from .meta_learner import compute_regime_probs
                     vix_rank = macro_ctx.get("vix_pct_rank", 0.5) if macro_ctx else 0.5
                     rp = compute_regime_probs(out.get("metadata", {}), vix_rank)
-                    ew = get_ensemble_weights(rp, req.methods)
-                    _hmm_out_extras["regime_probs"]     = rp
-                    _hmm_out_extras["ensemble_weights"] = ew
+                    _hmm_out_extras["regime_probs"] = rp
                     logger.info("Regime: %s (dom=%s)", rp, rp.get("dominant"))
                 except Exception as exc:
                     logger.debug("Regime classification failed: %s", exc)
-
-            elif method == "factor":
-                out = forecast_factor(returns, h, np_, last_date,
-                                     req.ff5_decomposition, macro_ctx or None)
-                if insider.get("available"):
-                    out["metadata"]["insider_context"] = insider
+                # Shadow OOS
+                if "hmm_shadow" in _pending_futures:
+                    try:
+                        shadow_out  = _pending_futures["hmm_shadow"].result(timeout=20)
+                        shadow_band_obj = ForecastBand(**shadow_out["band"])
+                        oos_r2_val  = _compute_oos_r2(shadow_out["band"], shadow_actual_returns)
+                        out["metadata"]["oos_r2"] = oos_r2_val
+                    except Exception as exc:
+                        logger.debug("HMM shadow failed: %s", exc)
 
             elif method == "var":
                 # VAR key preserved for backward compat; computes Gaussian Process
@@ -1252,14 +1021,38 @@ def run_all_forecasts(req) -> dict:
                     out["metadata"]["vix_pct_rank"]      = macro_ctx.get("vix_pct_rank")
                     out["metadata"]["vix_term_slope"]    = macro_ctx.get("vix_term_slope")
                     out["metadata"]["yield_curve_10y2y"] = macro_ctx.get("yield_curve_10y2y")
+                # Shadow OOS
+                if "var_shadow" in _pending_futures:
+                    try:
+                        shadow_out  = _pending_futures["var_shadow"].result(timeout=20)
+                        shadow_band_obj = ForecastBand(**shadow_out["band"])
+                        oos_r2_val  = _compute_oos_r2(shadow_out["band"], shadow_actual_returns)
+                        out["metadata"]["oos_r2"] = oos_r2_val
+                    except Exception as exc:
+                        logger.debug("GP shadow failed: %s", exc)
+
+            elif method == "timesfm":
+                # Always-warm singleton; TTLCache means repeat calls are free
+                out = _pending_futures["timesfm"].result(timeout=60)
+                # Shadow OOS
+                if "timesfm_shadow" in _pending_futures:
+                    try:
+                        shadow_out  = _pending_futures["timesfm_shadow"].result(timeout=30)
+                        shadow_band_obj = ForecastBand(**shadow_out["band"])
+                        oos_r2_val  = _compute_oos_r2(shadow_out["band"], shadow_actual_returns)
+                        out["metadata"]["oos_r2"] = oos_r2_val
+                    except Exception as exc:
+                        logger.debug("TimesFM shadow failed: %s", exc)
 
             else:
                 raise ValueError(f"Unknown forecast method: {method!r}")
 
-            # ── Common append path for hmm/factor/var ─────────────────────────
+            # ── Common append path for server-side methods ────────────────────
             results.append(MethodResult(
                 method=method, label=label, color=color,
                 forecast=ForecastBand(**out["band"]),
+                shadow_band=shadow_band_obj,
+                oos_r2=oos_r2_val,
                 metadata=out.get("metadata", {}),
                 compute_ms=out.get("compute_ms", 0),
             ))
@@ -1288,8 +1081,21 @@ def run_all_forecasts(req) -> dict:
         "news_available": bool(news_ctx.get("portfolio_summary", {}).get("available")),
     }
 
-    regime_probs     = _hmm_out_extras.get("regime_probs")
-    ensemble_weights = _hmm_out_extras.get("ensemble_weights")
+    regime_probs = _hmm_out_extras.get("regime_probs")
+
+    # Ensemble weights from OOS R² on shadow holdout — computed after all
+    # server-side methods complete so all R²s are available simultaneously.
+    try:
+        from .meta_learner import get_ensemble_weights_from_oos_r2
+        method_r2s = {
+            r.method: r.oos_r2
+            for r in results
+            if r.forecast is not None    # only methods that produced a band
+        }
+        ensemble_weights = get_ensemble_weights_from_oos_r2(method_r2s) if method_r2s else None
+    except Exception as exc:
+        logger.debug("OOS R² ensemble weighting failed: %s", exc)
+        ensemble_weights = None
 
     return ForecastResponse(
         forecast_start=forecast_dates[0] if forecast_dates else last_date,
@@ -1301,4 +1107,6 @@ def run_all_forecasts(req) -> dict:
         tier2_context=tier2_summary,
         regime_probs=regime_probs,
         ensemble_weights=ensemble_weights,
+        shadow_forecast_start=shadow_forecast_start,
+        shadow_forecast_end=shadow_forecast_end,
     )

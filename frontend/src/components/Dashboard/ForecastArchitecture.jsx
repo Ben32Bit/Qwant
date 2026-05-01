@@ -1,12 +1,11 @@
 /**
  * ForecastArchitecture — Collapsible pipeline diagram for the forecast system.
- * Shows every layer: data ingestion → 6 base models → regime → ensemble → outputs.
+ * Shows every layer: inputs → providers → two-pass eval → 5 methods → OOS R² ensemble → outputs.
  */
 import { useState } from 'react'
 
 const METHOD_COLORS = {
-  factor:  '#00d4aa', xgboost: '#4a9eff', nbeats: '#ffd43b',
-  hmm:     '#a855f7', var:     '#ff6b35', lstm:   '#ff4757',
+  nbeats: '#ffd43b', timesfm: '#00d4aa', hmm: '#a855f7', var: '#ff6b35', lstm: '#ff4757',
 }
 
 // ── Small building blocks ─────────────────────────────────────────────────────
@@ -58,90 +57,86 @@ function Diagram() {
   return (
     <div className="space-y-0 mt-2">
 
-      {/* Layer 0: Data sources */}
-      <LayerLabel>① Data ingestion</LayerLabel>
-      <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
-        <Pill label="yfinance" sub="prices" color="#4a9eff" />
+      {/* Layer ①: Inputs */}
+      <LayerLabel>① Inputs</LayerLabel>
+      <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+        <Pill label="Portfolio equity curve" color="#4a9eff" />
+        <Pill label="Asset weights" color="#4a9eff" />
+        <Pill label="Date range" color="#4a9eff" />
+      </div>
+
+      <Arrow />
+
+      {/* Layer ②: Provider fan-out */}
+      <LayerLabel>② Provider fan-out · parallel</LayerLabel>
+      <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
         <Pill label="FRED" sub="macro" color="#00d4aa" />
-        <Pill label="GDELT" sub="news" color="#ffd43b" />
-        <Pill label="EDGAR" sub="10-K/Q" color="#a855f7" />
-        <Pill label="Reddit" sub="WSB" color="#ff6b35" />
+        <Pill label="VIX" sub="vol regime" color="#ffd43b" />
+        <Pill label="GDELT" sub="news" color="#a855f7" />
+        <Pill label="Reddit" sub="sentiment" color="#ff6b35" />
+        <Pill label="SEC" sub="insider" color="#ff4757" />
+        <Pill label="EDGAR" sub="10-K/Q" color="#4a9eff" />
       </div>
 
       <Arrow />
 
-      {/* Layer 1: Server Phase 1 */}
-      <LayerLabel>② Server — Phase 1 · fast (≈4s)</LayerLabel>
-      <div className="flex gap-2">
-        <Box label="Factor Model" sub="FF5+Mom loadings × premia" color={METHOD_COLORS.factor} tag="returns forecast" />
-        <Box label="XGBoost features" sub="14 signals → ONNX browser" color={METHOD_COLORS.xgboost} tag="feature prep" />
-        <Box label="N-BEATS features" sub="30-day window → pure-JS" color={METHOD_COLORS.nbeats} tag="feature prep" />
-      </div>
-
-      <Arrow />
-
-      {/* Layer 2: Browser Phase 1B (parallel with Phase 2) */}
-      <div className="flex gap-2">
-        <div className="flex-1 space-y-0">
-          <LayerLabel>③ Browser — Phase 1B · ONNX / pure-JS</LayerLabel>
-          <div className="flex gap-2">
-            <Box label="XGBoost ONNX" sub="5 quantile models · √t scaling" color={METHOD_COLORS.xgboost} tag="fan chart" />
-            <Box label="N-BEATS" sub="12×21d recursive periods" color={METHOD_COLORS.nbeats} tag="fan chart" />
-          </div>
-        </div>
-        <div className="flex-1 space-y-0">
-          <LayerLabel>④ Server — Phase 2 · slow (≈15s)</LayerLabel>
-          <div className="flex gap-2">
-            <Box label="HMM" sub="2-state Baum-Welch · regime" color={METHOD_COLORS.hmm} tag="fan chart" />
-            <Box label="GP" sub="Matérn 5/2 · Bayesian" color={METHOD_COLORS.var} tag="fan chart" />
-          </div>
-        </div>
-      </div>
-
-      <Arrow />
-
-      {/* Layer 3: Browser Phase 3 */}
-      <LayerLabel>⑤ Browser — Phase 3 · TF.js</LayerLabel>
-      <Box label="Attention-LSTM" sub="LSTM(64) → Bahdanau attention → MC Dropout (200 passes)" color={METHOD_COLORS.lstm} tag="fan chart" />
-
-      <Arrow />
-
-      {/* Layer 4: Regime detection */}
-      <LayerLabel>⑥ Regime classification</LayerLabel>
-      <div className="rounded-lg px-3 py-2 flex items-center gap-4"
-        style={{ background: 'rgba(168,85,247,0.08)', border: '1px solid rgba(168,85,247,0.3)' }}>
-        <div>
-          <div className="mono font-bold" style={{ fontSize: 10, color: '#a855f7' }}>HMM × VIX → 4-state regime</div>
-          <div className="mono" style={{ fontSize: 9, color: 'var(--text-secondary)' }}>
-            Bull/Low-Vol · Bull/High-Vol · Bear · Crisis
-          </div>
-        </div>
-        <div className="flex gap-1 ml-auto">
-          {[['Bull', '#00d4aa'], ['Bull↑σ', '#4a9eff'], ['Bear', '#ff6b35'], ['Crisis', '#ff4757']].map(([l, c]) => (
-            <span key={l} className="mono px-1.5 py-0.5 rounded" style={{ fontSize: 8, background: `${c}22`, color: c, border: `1px solid ${c}44` }}>{l}</span>
-          ))}
-        </div>
-      </div>
-
-      <Arrow />
-
-      {/* Layer 5: Meta-ensemble */}
-      <LayerLabel>⑦ Meta-ensemble · Wolpert (1992) stacked generalisation</LayerLabel>
+      {/* Layer ③: Two-pass evaluation */}
+      <LayerLabel>③ Two-pass evaluation · per method</LayerLabel>
       <div className="rounded-lg px-3 py-2"
-        style={{ background: 'rgba(74,158,255,0.08)', border: '1px solid rgba(74,158,255,0.35)' }}>
-        <div className="mono font-bold mb-1" style={{ fontSize: 10, color: 'var(--accent-blue)' }}>
-          Regime-conditional ensemble
+        style={{ background: 'rgba(74,158,255,0.06)', border: '1px solid rgba(74,158,255,0.25)' }}>
+        <div className="grid gap-2" style={{ gridTemplateColumns: '1fr 1fr' }}>
+          <div>
+            <div className="mono font-bold mb-1" style={{ fontSize: 9, color: '#ff6b35' }}>
+              SHADOW  [start → T−60] → forecast [T−60, T−30]
+            </div>
+            <div className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)' }}>
+              Shadow p50 vs actual → OOS R² · drives ensemble weights
+            </div>
+          </div>
+          <div>
+            <div className="mono font-bold mb-1" style={{ fontSize: 9, color: '#00d4aa' }}>
+              FORWARD  [start → T] → forecast [T, T+63]
+            </div>
+            <div className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)' }}>
+              Full-history forward pass · displayed in fan charts
+            </div>
+          </div>
         </div>
-        <div className="flex gap-2 flex-wrap">
+      </div>
+
+      <Arrow />
+
+      {/* Layer ④: Five forecast methods */}
+      <LayerLabel>④ Five forecast methods</LayerLabel>
+      <div className="space-y-1">
+        <div className="flex gap-1">
+          <Box label="N-BEATS" sub="3 residual stacks · pure-JS browser · 63d recursive" color={METHOD_COLORS.nbeats} tag="browser · phase 1" />
+          <Box label="LSTM" sub="Attention-LSTM(64) · MC Dropout 200× · TF.js" color={METHOD_COLORS.lstm} tag="browser · phase 3" />
+        </div>
+        <div className="flex gap-1">
+          <Box label="HMM" sub="2-state Baum-Welch · regime-conditional sim · 1 000 paths" color={METHOD_COLORS.hmm} tag="server · phase 2" />
+          <Box label="GP" sub="Matérn ν=5/2 ARD · Bayesian uncertainty · rollout" color={METHOD_COLORS.var} tag="server · phase 2" />
+          <Box label="TimesFM 2.5" sub="Google 200M · zero-shot · always-warm singleton" color={METHOD_COLORS.timesfm} tag="server · phase 2" />
+        </div>
+      </div>
+
+      <Arrow />
+
+      {/* Layer ⑤: OOS R²-weighted ensemble */}
+      <LayerLabel>⑤ Ensemble blending · OOS R²-weighted · Wolpert (1992)</LayerLabel>
+      <div className="rounded-lg px-3 py-2"
+        style={{ background: 'rgba(0,212,170,0.07)', border: '1px solid rgba(0,212,170,0.3)' }}>
+        <div className="mono font-bold mb-1" style={{ fontSize: 10, color: 'var(--accent-green)' }}>
+          OOS R² → clip(0) → normalise → TimesFM ≥ 30% floor → blend p5/p25/p50/p75/p95
+        </div>
+        <div className="flex gap-3 flex-wrap">
           {[
-            ['Bull/LV', 'factor 35% · xgb 25% · hmm 18%', '#00d4aa'],
-            ['Bull/HV', 'xgb 35% · hmm 25% · factor 18%', '#4a9eff'],
-            ['Bear',    'hmm 35% · var 25% · factor 18%',  '#ff6b35'],
-            ['Crisis',  'var 35% · hmm 30% · xgb 15%',    '#ff4757'],
-          ].map(([regime, weights, color]) => (
-            <div key={regime} className="rounded px-2 py-1" style={{ background: `${color}12`, border: `1px solid ${color}30` }}>
-              <div className="mono font-bold" style={{ fontSize: 9, color }}>{regime}</div>
-              <div className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)' }}>{weights}</div>
+            ['Disagreement', 'Krogh & Vedelsby (1995) — high disagreement widens outer bands'],
+            ['Regime display', 'HMM × VIX → 4-state (bull/bear × vol) — shown in donut, not used for weighting'],
+          ].map(([title, desc]) => (
+            <div key={title} className="rounded px-2 py-1" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)' }}>
+              <div className="mono font-bold" style={{ fontSize: 8, color: 'var(--text-secondary)' }}>{title}</div>
+              <div className="mono" style={{ fontSize: 8, color: 'var(--text-secondary)', opacity: 0.7 }}>{desc}</div>
             </div>
           ))}
         </div>
@@ -149,25 +144,25 @@ function Diagram() {
 
       <Arrow />
 
-      {/* Layer 6: Outputs */}
-      <LayerLabel>⑧ Outputs</LayerLabel>
+      {/* Layer ⑥: Outputs */}
+      <LayerLabel>⑥ Outputs</LayerLabel>
       <div className="flex gap-2">
-        <Box label="Fan charts" sub="p5/p25/p50/p75/p95 bands at 63 days" color="#4a9eff" tag="per method" />
-        <Box label="Kelly sizing" sub="f* = μ/σ² · half-Kelly · regime adj" color="#00d4aa" tag="position size" />
+        <Box label="Fan charts" sub="p5/p25/p50/p75/p95 · IS R² + OOS R² per card" color="#4a9eff" tag="per method" />
+        <Box label="Kelly sizing" sub="f* = μ/σ² · half-Kelly · regime confidence adj" color="#00d4aa" tag="position size" />
         <Box label="Scenario stress" sub="6 macro regimes · weight + Kelly delta" color="#ffd43b" tag="what-if" />
         <Box label="FinBERT" sub="News + SEC filings · browser NLP" color="#a855f7" tag="sentiment" />
       </div>
 
       {/* Legend */}
       <div className="flex gap-4 mt-3 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
-        {[['Server', '#4a9eff'], ['Browser', '#00d4aa'], ['Regime', '#a855f7']].map(([l, c]) => (
+        {[['Server', '#4a9eff'], ['Browser', '#00d4aa'], ['Ensemble', 'var(--accent-green)']].map(([l, c]) => (
           <span key={l} className="mono flex items-center gap-1" style={{ fontSize: 9, color: 'var(--text-secondary)' }}>
             <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 2, background: c }} />
             {l}
           </span>
         ))}
         <span className="mono ml-auto" style={{ fontSize: 9, color: 'var(--text-secondary)', opacity: 0.6 }}>
-          Ang & Timmermann (2012) · Wolpert (1992) · Kelly (1956) · López de Prado (2018)
+          Wolpert (1992) · Krogh & Vedelsby (1995) · Kelly (1956) · López de Prado (2018)
         </span>
       </div>
     </div>
@@ -192,7 +187,7 @@ export default function ForecastArchitecture() {
             ⬡ FORECAST ARCHITECTURE
           </span>
           <span className="mono text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
-            · 8-layer pipeline · 6 research models · regime-conditional ensemble
+            · 6-layer pipeline · 5 research models · OOS R²-weighted ensemble
           </span>
         </div>
         <span className="mono text-xs" style={{ color: 'var(--text-secondary)' }}>

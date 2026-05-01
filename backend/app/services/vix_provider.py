@@ -142,7 +142,6 @@ def download_vix_history(start: str, end: str) -> pd.DataFrame:
     Returns a DataFrame with columns [vix_spot, vix_pct_rank, vix_term_slope, vix_contango],
     business-day index, aligned to [start, end].
 
-    Used by train_xgboost.py.
     """
     import yfinance as yf  # noqa: PLC0415
 

@@ -1,29 +1,7 @@
 import { useState, useCallback, useRef, useMemo } from 'react'
 
-const PHASE1_METHODS = ['xgboost', 'nbeats', 'factor']
-const PHASE2_METHODS = ['hmm', 'var', 'lstm']
-
-// Per-method horizon caps (trading days). Forecast horizon is 63 days
-// (3 months). XGBoost's quantile regressor is trained on a 21-day target,
-// so its extrapolation past day 21 is √t-scaled (heuristic, not earned).
-// N-BEATS' native horizon is 63d (three 21-day recursive blocks) — exactly
-// matches the new horizon, so the cap is a no-op but kept for clarity.
-// Factor / HMM / GP / LSTM simulate the full 63-day path directly.
-export const HORIZON_CAPS_DAYS = { xgboost: 21, nbeats: 63 }
-
-function capBand(band, maxDays) {
-  if (!band?.dates?.length || !maxDays) return band
-  const cap = Math.min(band.dates.length, maxDays)
-  if (cap === band.dates.length) return band
-  return {
-    dates: band.dates.slice(0, cap),
-    p5:    band.p5?.slice(0, cap),
-    p25:   band.p25?.slice(0, cap),
-    p50:   band.p50?.slice(0, cap),
-    p75:   band.p75?.slice(0, cap),
-    p95:   band.p95?.slice(0, cap),
-  }
-}
+const PHASE1_METHODS = ['nbeats']
+const PHASE2_METHODS = ['hmm', 'var', 'lstm', 'timesfm']
 
 export function useForecast(backtest, portfolio) {
   const [phase1, setPhase1] = useState(null)
@@ -31,14 +9,13 @@ export function useForecast(backtest, portfolio) {
   const [newsContext, setNewsContext]   = useState(null)
   const [edgarContext, setEdgarContext] = useState(null)
   const [loading, setLoading] = useState({
-    phase1: false, xgb: false, nbeats: false, phase2: false, lstm: false,
+    phase1: false, nbeats: false, phase2: false, lstm: false,
   })
   const [error, setError]   = useState(null)
   const [timing, setTiming] = useState({
-    phase1Ms: null, xgbMs: null, nbeatsMs: null, phase2Ms: null, lstmMs: null,
+    phase1Ms: null, nbeatsMs: null, phase2Ms: null, lstmMs: null,
   })
   const p1Start     = useRef(null)
-  const xgbStart    = useRef(null)
   const nbeatsStart = useRef(null)
   const p2Start     = useRef(null)
   const lstmStart   = useRef(null)
@@ -47,7 +24,7 @@ export function useForecast(backtest, portfolio) {
     if (!backtest?.equity_curve) return
     setPhase1(null); setPhase2(null)
     setNewsContext(null); setEdgarContext(null); setError(null)
-    setTiming({ phase1Ms: null, xgbMs: null, nbeatsMs: null, phase2Ms: null, lstmMs: null })
+    setTiming({ phase1Ms: null, nbeatsMs: null, phase2Ms: null, lstmMs: null })
 
     const body = {
       equity_curve:      backtest.equity_curve,
@@ -59,7 +36,7 @@ export function useForecast(backtest, portfolio) {
       ff5_decomposition: backtest.ff5_decomposition ?? null,
     }
 
-    // ── Phase 1: server ───────────────────────────────────────────────────
+    // ── Phase 1: server → N-BEATS features ───────────────────────────────
     p1Start.current = Date.now()
     setLoading(l => ({ ...l, phase1: true }))
     let p1Data = null
@@ -81,117 +58,42 @@ export function useForecast(backtest, portfolio) {
       setLoading(l => ({ ...l, phase1: false }))
     }
 
-    // ── Phase 1B: XGBoost + N-BEATS browser ONNX (parallel) ────────────────
+    // ── Phase 1B: N-BEATS browser inference ─────────────────────────────
     if (p1Data) {
-      const xgbResult    = p1Data.results?.find(r => r.method === 'xgboost' && r.metadata?.client_side)
-      const nbeatsResult = p1Data.results?.find(r => r.method === 'nbeats'  && r.metadata?.client_side)
-      const tasks = []
-
-      if (xgbResult) {
-        xgbStart.current = Date.now()
-        setLoading(l => ({ ...l, xgb: true }))
-        const xgb_features = xgbResult.metadata?.xgb_features
-        // Guard: if the server contract broke and features aren't present,
-        // fail the card loudly instead of letting the browser task hang
-        // and leave the UI stuck on "waiting…".
-        if (!xgb_features || !Array.isArray(xgb_features.features)) {
-          setPhase1(p1 => p1 ? {
-            ...p1,
-            results: p1.results.map(r => r.method !== 'xgboost' ? r : {
-              ...r, error: 'XGBoost: server returned no feature bundle',
-            }),
-          } : p1)
-          setLoading(l => ({ ...l, xgb: false }))
-        } else {
-          tasks.push(
-            import('../ml/XGBoostInferer.js')
-              .then(({ inferXGBoost }) => inferXGBoost({
-                features:      xgb_features.features,
-                forecastDates: xgb_features.forecast_dates,
-              }))
-              .then(band => {
-                const xgbMs = Date.now() - (xgbStart.current ?? Date.now())
-                setTiming(t => ({ ...t, xgbMs }))
-                const capped = capBand(band, HORIZON_CAPS_DAYS.xgboost)
-                setPhase1(p1 => p1 ? {
-                  ...p1,
-                  results: p1.results.map(r => r.method !== 'xgboost' ? r : {
-                    ...r, forecast: capped, compute_ms: xgbMs,
-                    metadata: {
-                      oos_r2: xgb_features.oos_r2 ?? null,
-                      ret_21d_ann: xgb_features.ret_21d_ann,
-                      vol_21d_ann: xgb_features.vol_21d_ann,
-                      rsi_14: xgb_features.rsi_14,
-                      vol_regime: xgb_features.vol_regime,
-                      n_obs: xgb_features.n_obs,
-                      client_side: false,
-                    },
-                  }),
-                } : p1)
-              })
-              .catch(e => {
-                console.warn('XGBoost inference failed:', e)
-                setPhase1(p1 => p1 ? {
-                  ...p1,
-                  results: p1.results.map(r => r.method !== 'xgboost' ? r : {
-                    ...r, error: `XGBoost: ${e?.message ?? String(e)}`,
-                  }),
-                } : p1)
-              })
-              .finally(() => setLoading(l => ({ ...l, xgb: false })))
-          )
-        }
-      } else {
-        // Server returned xgboost result but without client_side — surface
-        // this rather than leaving the card on "waiting…" forever.
-        const rawXgb = p1Data.results?.find(r => r.method === 'xgboost')
-        if (rawXgb && !rawXgb.error && !rawXgb.forecast) {
-          setPhase1(p1 => p1 ? {
-            ...p1,
-            results: p1.results.map(r => r.method !== 'xgboost' ? r : {
-              ...r, error: 'XGBoost: server did not flag client_side inference',
-            }),
-          } : p1)
-        }
-      }
+      const nbeatsResult = p1Data.results?.find(r => r.method === 'nbeats' && r.metadata?.client_side)
 
       if (nbeatsResult) {
         nbeatsStart.current = Date.now()
         setLoading(l => ({ ...l, nbeats: true }))
         const { nbeats_features } = nbeatsResult.metadata
-        tasks.push(
-          import('../ml/NBeatsInferer.js')
-            .then(({ inferNBeats }) => inferNBeats({
-              lastWindow:    nbeats_features.last_window,
-              forecastDates: nbeats_features.forecast_dates,
-            }))
-            .then(band => {
-              const nbeatsMs = Date.now() - (nbeatsStart.current ?? Date.now())
-              setTiming(t => ({ ...t, nbeatsMs }))
-              const capped = capBand(band, HORIZON_CAPS_DAYS.nbeats)
-              setPhase1(p1 => p1 ? {
-                ...p1,
-                results: p1.results.map(r => r.method !== 'nbeats' ? r : {
-                  ...r, forecast: capped, compute_ms: nbeatsMs,
-                  metadata: {
-                    vol_21d_ann: nbeats_features.vol_21d_ann,
-                    ret_21d:     nbeats_features.ret_21d,
-                    n_obs:       nbeats_features.n_obs,
-                    periods:     Math.ceil(HORIZON_CAPS_DAYS.nbeats / 21),
-                    client_side: false,
-                  },
-                }),
-              } : p1)
-            })
-            .catch(e => setPhase1(p1 => p1 ? {
+        await import('../ml/NBeatsInferer.js')
+          .then(({ inferNBeats }) => inferNBeats({
+            lastWindow:    nbeats_features.last_window,
+            forecastDates: nbeats_features.forecast_dates,
+          }))
+          .then(band => {
+            const nbeatsMs = Date.now() - (nbeatsStart.current ?? Date.now())
+            setTiming(t => ({ ...t, nbeatsMs }))
+            setPhase1(p1 => p1 ? {
               ...p1,
-              results: p1.results.map(r => r.method !== 'nbeats' ? r : { ...r, error: e.message }),
-            } : p1))
-            .finally(() => setLoading(l => ({ ...l, nbeats: false })))
-        )
+              results: p1.results.map(r => r.method !== 'nbeats' ? r : {
+                ...r, forecast: band, compute_ms: nbeatsMs,
+                metadata: {
+                  vol_21d_ann: nbeats_features.vol_21d_ann,
+                  ret_21d:     nbeats_features.ret_21d,
+                  n_obs:       nbeats_features.n_obs,
+                  periods:     3,
+                  client_side: false,
+                },
+              }),
+            } : p1)
+          })
+          .catch(e => setPhase1(p1 => p1 ? {
+            ...p1,
+            results: p1.results.map(r => r.method !== 'nbeats' ? r : { ...r, error: e.message }),
+          } : p1))
+          .finally(() => setLoading(l => ({ ...l, nbeats: false })))
       }
-
-      await Promise.all(tasks)
     }
 
     // ── Phase 2: server ────────────────────────────────────────────────────
@@ -271,9 +173,10 @@ export function useForecast(backtest, portfolio) {
         // so they render as "error" instead of "waiting…"
         setPhase2({
           results: [
-            { method: 'hmm',  label: 'HMM',              color: '#4a9eff', error: reason },
-            { method: 'var',  label: 'Gaussian Process', color: '#9c88ff', error: reason },
-            { method: 'lstm', label: 'Attention-LSTM',   color: '#ff4757', error: reason },
+            { method: 'hmm',     label: 'HMM',              color: '#a855f7', error: reason },
+            { method: 'var',     label: 'Gaussian Process', color: '#ff6b35', error: reason },
+            { method: 'lstm',    label: 'Attention-LSTM',   color: '#ff4757', error: reason },
+            { method: 'timesfm', label: 'TimesFM 2.5',      color: '#00d4aa', error: reason },
           ],
         })
       }
@@ -329,8 +232,10 @@ export function useForecast(backtest, portfolio) {
   const meta = (phase1 || phase2)
     ? {
         ...(phase1 ?? {}),
-        regime_probs:     phase2?.regime_probs     ?? phase1?.regime_probs     ?? null,
-        ensemble_weights: phase2?.ensemble_weights ?? phase1?.ensemble_weights ?? null,
+        regime_probs:          phase2?.regime_probs          ?? phase1?.regime_probs          ?? null,
+        ensemble_weights:      phase2?.ensemble_weights      ?? phase1?.ensemble_weights      ?? null,
+        shadow_forecast_start: phase2?.shadow_forecast_start ?? null,
+        shadow_forecast_end:   phase2?.shadow_forecast_end   ?? null,
       }
     : null
 
@@ -345,7 +250,6 @@ export function useForecast(backtest, portfolio) {
     newsContext,
     edgarContext,
     p1StartRef:     p1Start,
-    xgbStartRef:    xgbStart,
     nbeatsStartRef: nbeatsStart,
     p2StartRef:     p2Start,
     lstmStartRef:   lstmStart,
@@ -356,9 +260,7 @@ function mergeResults(phase1, phase2) {
   if (!phase1) return []
   const map = {}
   for (const r of (phase1.results ?? [])) map[r.method] = r
-  for (const r of (phase2?.results ?? [])) {
-    map[r.method] = r
-  }
-  const order = ['xgboost', 'nbeats', 'factor', 'hmm', 'var', 'lstm']
+  for (const r of (phase2?.results ?? [])) map[r.method] = r
+  const order = ['nbeats', 'timesfm', 'hmm', 'var', 'lstm']
   return order.map(m => map[m]).filter(Boolean)
 }
