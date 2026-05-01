@@ -154,36 +154,63 @@ def forecast_timesfm(
 
     with torch.no_grad():
         # TimesFm2_5ModelForPrediction uses past_values= (not context=).
+        # The HF transformers build does NOT support quantile_levels= kwarg.
         try:
             output = model(
                 past_values=ctx_tensor,
                 prediction_length=horizon,
-                quantile_levels=_Q_LEVELS,
             )
         except TypeError:
-            # Older build without quantile_levels kwarg
-            output = model(past_values=ctx_tensor, prediction_length=horizon)
+            output = model(past_values=ctx_tensor)
 
-        # Output attribute name varies across transformers patch versions
-        raw = (getattr(output, "quantile_preds",     None)
-            or getattr(output, "quantile_forecasts", None)
-            or getattr(output, "prediction_outputs", None))
+        # HF ModelOutput is dict-like — probe known attribute names.
+        def _get(key):
+            try:
+                v = output[key]
+                return v if v is not None else None
+            except (KeyError, TypeError):
+                return getattr(output, key, None)
 
-        if raw is None:
-            attrs = [a for a in dir(output) if not a.startswith("_")]
+        raw_quantiles = (
+            _get("quantile_preds")
+            or _get("quantile_forecasts")
+            or _get("prediction_outputs")
+        )
+        raw_mean = _get("mean_predictions")
+
+        if raw_quantiles is None and raw_mean is None:
+            attrs = sorted(
+                k for k in (list(output.keys()) if hasattr(output, "keys") else dir(output))
+                if not str(k).startswith("_")
+            )
             raise RuntimeError(
                 f"TimesFM output format unrecognised — available attrs: {attrs}. "
                 "Upgrade transformers or open an issue."
             )
 
-        # Normalise to (horizon, n_quantiles) numpy array
-        arr = raw.cpu().numpy() if hasattr(raw, "cpu") else np.array(raw)
-        if arr.ndim == 3:
-            arr = arr[0]           # drop batch dim: (horizon, n_quantiles)
-        if arr.shape[-1] != len(_Q_LEVELS):
-            # No quantile output — replicate point forecast into 9 columns
-            arr = np.tile(arr[:, None] if arr.ndim == 1 else arr[:, :1],
-                          (1, len(_Q_LEVELS)))
+        synthesised_fan = False
+        if raw_quantiles is not None:
+            arr = raw_quantiles.cpu().numpy() if hasattr(raw_quantiles, "cpu") else np.array(raw_quantiles)
+            if arr.ndim == 3:
+                arr = arr[0]
+            if arr.ndim == 1 or arr.shape[-1] != len(_Q_LEVELS):
+                raw_quantiles = None          # fall through to mean path
+
+        if raw_quantiles is None:
+            # HF build returns only mean_predictions — synthesise fan from hist vol
+            arr_mean = raw_mean.cpu().numpy() if hasattr(raw_mean, "cpu") else np.array(raw_mean)
+            mean_levels = arr_mean.flatten()[:horizon]          # (horizon,)
+            daily_vol   = float(returns.iloc[-252:].std()) if len(returns) >= 5 else 0.01
+            t_steps     = np.arange(1, horizon + 1)
+            cum_vol     = daily_vol * np.sqrt(t_steps)          # growing uncertainty
+            from scipy.stats import norm as _norm
+            q_probs  = [0.05, 0.125, 0.25, 0.375, 0.50, 0.625, 0.75, 0.875, 0.95]
+            offsets  = _norm.ppf(q_probs)                       # z-scores for each quantile
+            arr = np.zeros((horizon, len(_Q_LEVELS)))
+            for col, z in enumerate(offsets):
+                arr[:, col] = mean_levels + z * cum_vol         # level space
+            synthesised_fan = True
+
         q = arr                    # (horizon, 9)
 
     # ── Convert absolute levels → cumulative % return ────────────────────────
@@ -195,21 +222,22 @@ def forecast_timesfm(
     band  = {
         "dates": dates,
         "p5":   cum_ret[:, 0].tolist(),
-        "p25":  ((cum_ret[:, 1] + cum_ret[:, 2]) / 2).tolist(),
+        "p25":  ((cum_ret[:, 2] + cum_ret[:, 3]) / 2).tolist(),
         "p50":  cum_ret[:, 4].tolist(),
-        "p75":  ((cum_ret[:, 6] + cum_ret[:, 7]) / 2).tolist(),
+        "p75":  ((cum_ret[:, 5] + cum_ret[:, 6]) / 2).tolist(),
         "p95":  cum_ret[:, 8].tolist(),
     }
 
     result = {
         "band": band,
         "metadata": {
-            "is_r2":       None,   # zero-shot: no training phase, IS R² not applicable
-            "model_id":    MODEL_ID,
-            "context_len": ctx_len,
-            "q_levels":    _Q_LEVELS,
-            "zero_shot":   True,
-            "normalized":  True,
+            "is_r2":          None,   # zero-shot: no training phase, IS R² not applicable
+            "model_id":       MODEL_ID,
+            "context_len":    ctx_len,
+            "q_levels":       _Q_LEVELS,
+            "zero_shot":      True,
+            "normalized":     True,
+            "synthesised_fan": synthesised_fan,
         },
         "compute_ms": int((time.time() - t0) * 1_000),
     }
