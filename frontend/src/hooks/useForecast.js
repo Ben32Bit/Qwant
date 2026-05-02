@@ -154,13 +154,18 @@ export function useForecast(backtest, portfolio) {
     }
 
     // ── Phase 3: browser Attention-LSTM (NO fallback — server features required) ─
-    const lstmServerResult = p2Data?.results?.find(
-      r => r.method === 'lstm' && r.metadata?.client_side === true
-    )
-    const lstmFeatures = lstmServerResult?.metadata?.lstm_features
+    // Look up the LSTM result regardless of metadata.client_side, so we can
+    // surface a server-side error message (e.g. insufficient history when a
+    // recently re-listed ticker like SNDK shrinks the common history window
+    // below the LSTM's ~315 trading-day floor) instead of swallowing it
+    // behind the generic "no feature bundle" message.
+    const lstmAnyResult = p2Data?.results?.find(r => r.method === 'lstm')
+    const lstmFeatures  = lstmAnyResult?.metadata?.lstm_features
 
     if (!lstmFeatures) {
-      const reason = p2FailReason ?? 'Server returned no LSTM feature bundle'
+      const reason = p2FailReason
+        ?? lstmAnyResult?.error
+        ?? 'Server returned no LSTM feature bundle'
       if (p2Data) {
         setPhase2(p2 => p2 ? {
           ...p2,
