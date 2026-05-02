@@ -273,7 +273,7 @@ function R2Pair({ isR2, oosR2 }) {
 
 // ── Main card ─────────────────────────────────────────────────────────────────
 
-function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) {
+function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue, compact = false }) {
   const [showDetails, setShowDetails] = useState(false)
   const { method, label, color, forecast, metadata, error, compute_ms, oos_r2 } = result ?? {}
   const citations = CITATIONS[method] ?? []
@@ -288,9 +288,15 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
       ).filter(Boolean)
     : []
 
+  // In compact mode the card lives inside a shared parent panel — drop the
+  // outer chrome (border, background, rounded), reduce chart height.
+  const wrapperClass = compact ? 'p-4' : 'rounded-lg border p-4'
+  const wrapperStyle = compact ? {} : { background: 'var(--bg-card)', borderColor: 'var(--border)' }
+  const chartHeight  = compact ? 130 : 180
+
   if (loading && !forecast) {
     return (
-      <div className="rounded-lg border p-4 flex flex-col" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)', minHeight: 220 }}>
+      <div className={`${wrapperClass} flex flex-col`} style={{ ...wrapperStyle, minHeight: compact ? 160 : 220 }}>
         {browserCompute ? (
           <>
             <div className="flex items-center gap-2 mb-3">
@@ -319,7 +325,7 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
   }
 
   return (
-    <div className="rounded-lg border p-4" style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
+    <div className={wrapperClass} style={wrapperStyle}>
 
       {/* Header */}
       <div className="flex items-center justify-between mb-1">
@@ -365,7 +371,7 @@ function ForecastMethodCardImpl({ result, loading, browserCompute, lastValue }) 
 
       {/* Fan chart — always shown when a forecast exists */}
       {forecast && chartData.length > 0 && (
-        <ResponsiveContainer width="100%" height={180}>
+        <ResponsiveContainer width="100%" height={chartHeight}>
           <ComposedChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 2 }}>
             <CartesianGrid {...GRID_STYLE} />
             <XAxis
@@ -424,5 +430,6 @@ export default memo(ForecastMethodCardImpl, (prev, next) =>
   prev.result === next.result &&
   prev.loading === next.loading &&
   prev.browserCompute === next.browserCompute &&
-  prev.lastValue === next.lastValue
+  prev.lastValue === next.lastValue &&
+  prev.compact === next.compact
 )

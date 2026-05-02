@@ -40,7 +40,7 @@ function CompositeChartSection({ children }) {
 }
 
 // Placeholder cards while a phase is loading
-function LoadingCard({ method, browserCompute = false }) {
+function LoadingCard({ method, browserCompute = false, compact = false }) {
   const LABELS = {
     nbeats:  'N-BEATS Neural',
     timesfm: 'TimesFM 2.5 (Google)',
@@ -57,6 +57,7 @@ function LoadingCard({ method, browserCompute = false }) {
       loading
       browserCompute={browserCompute}
       lastValue={null}
+      compact={compact}
     />
   )
 }
@@ -403,10 +404,19 @@ export default function ForecastPanel({ backtest, portfolio, forecast }) {
           </CompositeChartSection>
         )}
 
-        {/* 2×3 individual method cards */}
+        {/* Stacked individual method cards — single shared panel */}
         {(hasData || isRunning) && (
-          <div className="grid grid-cols-2 gap-4">
-            {METHOD_ORDER.map(method => {
+          <div className="rounded-lg border cv-auto"
+            style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}>
+            <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div className="mono text-xs font-bold" style={{ color: 'var(--text-primary)' }}>
+                Individual Forecasts
+              </div>
+              <div className="mono" style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 2 }}>
+                Per-method 63-day fan charts. Methods with OOS R² &lt; −0.5 are excluded from the composite ensemble but rendered here for transparency.
+              </div>
+            </div>
+            {METHOD_ORDER.map((method, idx) => {
               const result   = resultMap[method]
               const inPhase1 = PHASE1_METHODS.has(method)
               const inPhase2 = PHASE2_METHODS.has(method)
@@ -414,19 +424,22 @@ export default function ForecastPanel({ backtest, portfolio, forecast }) {
               const isNbeatsBrowserLoading = method === 'nbeats' && loading.nbeats
               const isLstmBrowserLoading   = method === 'lstm'   && loading.lstm
 
+              const sep = idx > 0 ? { borderTop: '1px solid var(--border)' } : {}
+
               if (!result && ((inPhase1 && loading.phase1) || (inPhase2 && loading.phase2))) {
-                return <div key={method} className="cv-auto"><LoadingCard method={method} /></div>
+                return <div key={method} style={sep}><LoadingCard method={method} compact /></div>
               }
               if (isNbeatsBrowserLoading || isLstmBrowserLoading) {
-                return <div key={method} className="cv-auto"><LoadingCard method={method} browserCompute /></div>
+                return <div key={method} style={sep}><LoadingCard method={method} browserCompute compact /></div>
               }
               if (!result) return null
               return (
-                <div key={method} className="cv-auto">
+                <div key={method} style={sep}>
                   <ForecastMethodCard
                     result={result}
                     loading={inPhase2 && loading.phase2 && !result.forecast}
                     lastValue={lastValue}
+                    compact
                   />
                 </div>
               )
