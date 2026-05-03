@@ -1,16 +1,41 @@
 """
-TimesFM 2.5 forecast provider — self-hosted, always-warm singleton.
+TimesFM 2.5 forecast provider — official google-research/timesfm package.
 
-Loads google/timesfm-2.5-200m-pytorch once per process at startup via
-transformers >= 4.48. Subsequent calls hit the in-process TTLCache (1h)
-keyed on a SHA-1 of the last 252 daily returns.
+CRITICAL: this module uses the `timesfm` package, NOT `transformers`.
+
+Background
+----------
+The HF transformers integration (TimesFm2_5ModelForPrediction) silently fails
+to load most checkpoint weights — the wrapper expects Llama-style separate
+q_proj/k_proj/v_proj projections, but Google's actual checkpoint uses the
+original combined qkv_proj layout. The result was a randomly-initialised
+~200 M-param model serving production traffic for weeks. Verified 2026-05
+via load-key inspection (every transformer layer parameter showed as
+MISSING from the HF model's perspective).
+
+Switching to `timesfm.TimesFM_2p5_200M_torch.from_pretrained()` loads the
+checkpoint cleanly (231 M params, no MISSING/UNEXPECTED keys) and gives
+access to the model's native quantile head — eliminating the previous
+Gaussian fan synthesis.
+
+Pipeline
+--------
+  1. load_timesfm()                   — once at startup (load + compile)
+  2. forecast_timesfm(returns, …)     — per-request, ~50 ms cached / ~500 ms cold
+
+Inference framing
+-----------------
+  * Input: raw equity-curve levels  L_t = ∏(1 + r_s)
+  * `normalize_inputs=True` lets the model handle scale internally
+  * Output: predicted future levels L̂_{T+1..T+H}, plus 10-channel quantiles
+  * Convert to cumulative simple-return path: cum_ret_h = (L̂_h − L_T) / L_T
+  * Fan bands: native quantile head (no Gaussian synthesis)
 
 References
 ----------
 Das, A. et al. (2024). A decoder-only foundation model for time-series
   forecasting. ICML 2024. https://arxiv.org/abs/2310.10688
-Google Research (2024). TimesFM 2.5 — improved zero-shot time series
-  forecasting. https://huggingface.co/google/timesfm-2.5-200m-pytorch
+Official package: https://github.com/google-research/timesfm
 """
 
 from __future__ import annotations
@@ -19,7 +44,6 @@ import hashlib
 import logging
 import threading
 import time
-from typing import Optional
 
 import numpy as np
 from cachetools import TTLCache
@@ -27,58 +51,70 @@ from cachetools import TTLCache
 logger = logging.getLogger(__name__)
 
 MODEL_ID    = "google/timesfm-2.5-200m-pytorch"
-CONTEXT_LEN = 512                                         # levels fed to the model
-_Q_LEVELS   = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+CONTEXT_LEN = 512                                         # context fed to the model
 
-_model: object = None          # loaded model, or the sentinel string "FAILED"
+# Upper bound of any horizon we'll request. forecast_engine.py uses:
+#   main horizon  = 63 trading days (one quarter, from the frontend)
+#   shadow horizon = 30 trading days (first half of the 60-day shadow window)
+# `max_horizon` in ForecastConfig is an UPPER BOUND — calling forecast(horizon=30)
+# on a model compiled with max_horizon=64 works fine. Setting one ceiling lets
+# both calls share a single compiled graph (no race-thrashing recompiles).
+MAX_HORIZON = 64
+
+_model: object = None                                     # loaded model, or "FAILED"
 _load_lock     = threading.Lock()
 _cache: TTLCache = TTLCache(maxsize=64, ttl=3_600)        # 1-hour in-process cache
 
 
 # ── Singleton load ────────────────────────────────────────────────────────────
 
-def _import_cls():
-    """
-    Resolve the TimesFM prediction class from transformers >= 4.48.
-    Tries the 2.5-specific name first, then the generic name introduced in 4.48.
-    Raises ImportError if neither is present.
-    """
-    for name in ("TimesFm2_5ModelForPrediction", "TimesFmModelForPrediction"):
-        try:
-            mod = __import__("transformers", fromlist=[name])
-            return getattr(mod, name)
-        except (ImportError, AttributeError):
-            continue
-    raise ImportError(
-        "TimesFM class not found — install transformers >= 4.48.0 "
-        "(pip install 'transformers>=4.48.0')"
-    )
-
-
 def load_timesfm() -> None:
     """
-    Blocking load called once from the FastAPI lifespan coroutine via
-    asyncio.to_thread().  Thread-safe: only the first caller acquires
-    the lock and does the actual download; subsequent callers return
-    immediately once _model is set.
+    Blocking load called once from the FastAPI lifespan via asyncio.to_thread().
+    Thread-safe via double-checked locking. Subsequent callers return immediately
+    once _model is set.
     """
     global _model
     if _model is not None:
         return
     with _load_lock:
-        if _model is not None:          # double-checked after acquiring lock
+        if _model is not None:
             return
         try:
-            import torch
-            cls = _import_cls()
-            logger.info("TimesFM: loading %s …", MODEL_ID)
+            import timesfm
+            from timesfm import ForecastConfig
             t0 = time.time()
-            model = cls.from_pretrained(MODEL_ID, torch_dtype=torch.float32)
-            model.eval()
+            logger.info("TimesFM: loading %s via official timesfm package …", MODEL_ID)
+            # torch_compile=False: torch.compile() is brittle on Railway's CPU-only
+            # environment and gives modest speedup we don't need (we have a 1-hour
+            # in-process cache for repeat queries).
+            model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
+                MODEL_ID, torch_compile=False,
+            )
+            n_params = sum(p.numel() for p in model.model.parameters())
+            t_loaded = time.time() - t0
+
+            # Pre-compile once with MAX_HORIZON ceiling so per-request forecasts
+            # never need to recompile (main h=63 and shadow h=30 share this graph).
+            t1 = time.time()
+            cfg = ForecastConfig(
+                max_context           = CONTEXT_LEN,
+                max_horizon           = MAX_HORIZON,
+                normalize_inputs      = True,    # internal z-score; we feed raw equity levels
+                per_core_batch_size   = 1,       # one series at a time (per-portfolio call)
+                force_flip_invariance = True,    # sign-flip TTA — improves directional accuracy
+                infer_is_positive     = True,    # equity curves are always positive
+                fix_quantile_crossing = True,    # enforce monotonic quantiles in output
+            )
+            model.compile(cfg)
             _model = model
-            logger.info("TimesFM: ready in %.1fs (RAM +200 MB est.)", time.time() - t0)
+            logger.info(
+                "TimesFM: ready (%d M params, ~%.0f MB fp32) — load %.1fs + compile %.1fs",
+                n_params // 1_000_000, n_params * 4 / 1e6,
+                t_loaded, time.time() - t1,
+            )
         except Exception as exc:
-            logger.error("TimesFM: failed to load — %s", exc)
+            logger.error("TimesFM: failed to load — %s", exc, exc_info=True)
             _model = "FAILED"
 
 
@@ -97,26 +133,20 @@ def forecast_timesfm(
     last_date: str,
 ) -> dict:
     """
-    Zero-shot probabilistic forecast via TimesFM 2.5 (200M parameters).
+    Zero-shot probabilistic forecast via TimesFM 2.5 (200 M parameters).
 
     Pipeline (raw equity-curve framing, linear return conversion):
       1. Build cumulative equity curve  L_t = ∏(1 + r_s) for s ≤ t
-      2. Feed the last CONTEXT_LEN level values to TimesFM as past_values
-         (no normalisation — TimesFM has internal scaling)
-      3. Model returns predicted future levels  L̂_{T+1..T+H}
+      2. Feed the last CONTEXT_LEN level values to TimesFM (normalised internally)
+      3. Model returns predicted future levels L̂_{T+1..T+H}  + 10-channel quantiles
       4. Cumulative simple-return path: cum_ret_h = (L̂_{T+h} − L_T) / L_T
-      5. Fan bands: synthesised in cum-return space as p50 ± z_q · σ · √t,
-         where σ is the trailing 252-day realised daily-return vol
+      5. Fan bands: native quantile head channels (no Gaussian synthesis)
 
-    Why raw levels and linear conversion:
-      * TimesFM is trained on diverse level series with internal scaling —
-        feeding the raw equity curve matches that training shape.
-      * Pre-normalising the curve to end at 1.0 fights the model's internal
-        scaling and biases it toward mean-of-history forecasts.
-      * Log-price framing + exp() conversion is theoretically clean but
-        amplifies any model output noise exponentially — small drifts at
-        the tail blow up into multi-thousand-percent spikes. Linear
-        conversion is bounded and well-behaved.
+    Why raw levels:
+      * `normalize_inputs=True` means the model z-scores internally and
+        denormalises outputs — feeding raw levels works regardless of magnitude.
+      * Linear conversion at the end stays bounded (no exp() blowup that
+        log-price + exp() would cause on noisy zero-shot output).
 
     Returns
     -------
@@ -131,7 +161,7 @@ def forecast_timesfm(
             "Try a longer backtest date range."
         )
 
-    # Cache key: SHA-1 of last 252 returns as raw bytes + horizon + date
+    # Cache key: SHA-1 of last 252 returns + horizon + date
     key = hashlib.sha1(
         returns.iloc[-252:].values.astype(np.float32).tobytes()
         + f"|{horizon}|{last_date}".encode()
@@ -146,106 +176,71 @@ def forecast_timesfm(
             "check Railway logs for 'TimesFM: failed to load')."
         )
 
+    if horizon > MAX_HORIZON:
+        raise ValueError(
+            f"TimesFM horizon {horizon} exceeds compiled MAX_HORIZON={MAX_HORIZON}. "
+            "Bump MAX_HORIZON in timesfm_provider.py and restart."
+        )
+
     t0 = time.time()
 
     # ── Build raw equity curve ──────────────────────────────────────────────
-    # Cumulative product of (1 + daily returns), no normalisation. TimesFM
-    # has internal scaling and handles arbitrary level magnitudes; pre-
-    # normalising fights it. Linear conversion at the end keeps the output
-    # bounded (no exp() blowup on noisy model predictions).
-    levels   = (1.0 + returns).cumprod()                          # equity curve
+    levels   = (1.0 + returns).cumprod()
     arr_lvl  = levels.values.astype(np.float32)
     context  = arr_lvl[-CONTEXT_LEN:]
-    last_lvl = float(arr_lvl[-1])                                 # L_T (anchor)
+    last_lvl = float(arr_lvl[-1])
     ctx_len  = len(context)
 
-    import torch
-    ctx_tensor = torch.tensor(context).unsqueeze(0)               # (1, ctx_len)
+    # ── Forecast ────────────────────────────────────────────────────────────
+    # Returns (point, quantiles):
+    #   point     : (1, horizon)        — point/mean prediction
+    #   quantiles : (1, horizon, 10)    — 10 native quantile channels
+    point, quantiles = model.forecast(horizon=horizon, inputs=[context])
 
-    with torch.no_grad():
-        # TimesFm2_5ModelForPrediction uses past_values= (not context=).
-        # The HF transformers build does NOT support quantile_levels= kwarg.
-        try:
-            output = model(past_values=ctx_tensor, prediction_length=horizon)
-        except TypeError:
-            output = model(past_values=ctx_tensor)
+    point_levels = point[0]                    # (horizon,)
+    q_levels     = quantiles[0]                # (horizon, 10)
 
-        # HF ModelOutput is dict-like — probe known attribute names.
-        def _get(key):
-            try:
-                v = output[key]
-                return v if v is not None else None
-            except (KeyError, TypeError):
-                return getattr(output, key, None)
+    # ── Convert level forecasts → cumulative % returns ──────────────────────
+    def _to_cum_pct(arr):
+        return ((arr - last_lvl) / last_lvl) * 100.0
 
-        raw_quantiles = (
-            _get("quantile_preds")
-            or _get("quantile_forecasts")
-            or _get("prediction_outputs")
-        )
-        raw_mean = _get("mean_predictions")
+    # ── Native quantile bands ───────────────────────────────────────────────
+    # Channel layout (TimesFM 2.5 default): [q0.1, q0.2, …, q0.9, mean].
+    # Sort along the channel axis as a defence against any layout drift —
+    # after `fix_quantile_crossing=True` the model already enforces monotonicity,
+    # but sorting is cheap insurance.
+    q_sorted = np.sort(q_levels, axis=-1)      # (horizon, 10) ascending
+    p10 = _to_cum_pct(q_sorted[:, 0])
+    p25 = _to_cum_pct(0.5 * (q_sorted[:, 1] + q_sorted[:, 2]))   # ~q0.25 between q0.2 & q0.3
+    p50 = _to_cum_pct(point_levels)                              # use dedicated point head
+    p75 = _to_cum_pct(0.5 * (q_sorted[:, 6] + q_sorted[:, 7]))   # ~q0.75 between q0.7 & q0.8
+    p90 = _to_cum_pct(q_sorted[:, 8])
 
-        if raw_quantiles is None and raw_mean is None:
-            attrs = sorted(
-                k for k in (list(output.keys()) if hasattr(output, "keys") else dir(output))
-                if not str(k).startswith("_")
-            )
-            raise RuntimeError(
-                f"TimesFM output format unrecognised — available attrs: {attrs}. "
-                "Upgrade transformers or open an issue."
-            )
-
-        # Extract central level forecast (median if quantiles, else mean).
-        synthesised_fan = True
-        pred_levels = None
-        if raw_quantiles is not None:
-            qarr = raw_quantiles.cpu().numpy() if hasattr(raw_quantiles, "cpu") else np.array(raw_quantiles)
-            if qarr.ndim == 3:
-                qarr = qarr[0]
-            if qarr.ndim == 2 and qarr.shape[-1] == len(_Q_LEVELS):
-                pred_levels = qarr[:horizon, 4]          # Q0.5 column = median level
-                synthesised_fan = False                  # native quantiles available
-        if pred_levels is None:
-            arr_mean = raw_mean.cpu().numpy() if hasattr(raw_mean, "cpu") else np.array(raw_mean)
-            pred_levels = arr_mean.flatten()[:horizon]
-
-    # ── Convert predicted levels → cumulative simple % return ───────────────
-    # cum_ret_h = (L̂_{T+h} − L_T) / L_T  — linear, bounded, no exp() blowup
-    cum_p50_pct = ((pred_levels - last_lvl) / last_lvl) * 100.0   # (horizon,)
-
-    # ── Synthesise fan bands in cumulative-return space ─────────────────────
-    # σ_daily · √t is the std of cumulative simple return at horizon t under
-    # a random-walk-with-drift model. Bands are p50 ± z_q · σ · √t (% units).
-    daily_vol   = float(returns.iloc[-252:].std()) if len(returns) >= 5 else 0.01
-    t_steps     = np.arange(1, horizon + 1)
-    cum_sd_pct  = daily_vol * np.sqrt(t_steps) * 100.0            # in cum-% units
-
-    from scipy.stats import norm as _norm
-    z05, z25, z75, z95 = _norm.ppf([0.05, 0.25, 0.75, 0.95])
-
-    def _band_pct(z):
-        return (cum_p50_pct + z * cum_sd_pct).tolist()
+    # Extrapolate to p5 / p95 from p10 / p90 using a Gaussian z-ratio.
+    # z(0.05)/z(0.10) = -1.645 / -1.282 ≈ 1.283. Symmetric on both tails.
+    p5  = p50 - (p50 - p10) * 1.283
+    p95 = p50 + (p90 - p50) * 1.283
 
     dates = _forecast_dates(last_date, horizon)
     band  = {
         "dates": dates,
-        "p5":   _band_pct(z05),
-        "p25":  _band_pct(z25),
-        "p50":  cum_p50_pct.tolist(),
-        "p75":  _band_pct(z75),
-        "p95":  _band_pct(z95),
+        "p5":   p5.tolist(),
+        "p25":  p25.tolist(),
+        "p50":  p50.tolist(),
+        "p75":  p75.tolist(),
+        "p95":  p95.tolist(),
     }
 
     result = {
         "band": band,
         "metadata": {
-            "is_r2":           None,   # zero-shot: no training phase
+            "is_r2":           None,                    # zero-shot: no training phase
             "model_id":        MODEL_ID,
             "context_len":     ctx_len,
             "input_transform": "raw_level",
             "zero_shot":       True,
-            "synthesised_fan": synthesised_fan,
-            "sigma_daily":     round(daily_vol, 6),
+            "synthesised_fan": False,                   # native quantile head
+            "loader":          "official_timesfm_2p5",  # vs legacy "transformers"
         },
         "compute_ms": int((time.time() - t0) * 1_000),
     }

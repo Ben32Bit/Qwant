@@ -34,3 +34,20 @@ scikit-learn>=1.4
 
 # Parquet engine for the price-download cache (backend/scripts/.price_cache.parquet)
 pyarrow>=15.0
+
+# ── TimesFM fine-tuning dependencies ─────────────────────────────────────────
+# (not needed for LSTM training — install only when running finetune_timesfm.py)
+
+# PyTorch — CPU build is enough for finetune_timesfm.py validation/local runs,
+# but use the CUDA wheel on RunPod for GPU training:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.2.0
+
+# HuggingFace stack: transformers ≥4.48 contains TimesFm2_5ModelForPrediction
+transformers>=4.48.0
+
+# PEFT: LoRA adapter support
+peft>=0.13.0
+
+# Accelerate: required by PEFT's save_pretrained + mixed-precision utilities
+accelerate>=0.30.0

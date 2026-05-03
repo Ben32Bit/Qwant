@@ -27,4 +27,8 @@ statsmodels>=0.14.0    # VAR — Sims (1980), Campbell et al. (2003)
 # CPU wheel from PyTorch index (~200 MB, avoids 2 GB CUDA build).
 # --extra-index-url at top of this file points to download.pytorch.org/whl/cpu.
 torch>=2.3.0
-transformers>=4.48.0   # TimesFm2_5ModelForPrediction added in 4.48+
+# Official google-research/timesfm package from GitHub master.
+# Do NOT use `transformers`'s TimesFm2_5ModelForPrediction — that integration
+# silently drops most checkpoint weights (verified 2026-05). The official
+# package loads all 231M params correctly via TimesFM_2p5_200M_torch.
+timesfm @ git+https://github.com/google-research/timesfm.git

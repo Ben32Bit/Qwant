@@ -2207,3 +2207,73 @@ The existing `ForecastComposite` (12-month continuous chart) is now wrapped in a
 **Pending:**
 - [ ] Smoke test: run the forecast on a high-vol portfolio that previously broke the LSTM and confirm it either comes back plausible or surfaces an error cleanly.
 - [ ] Consider adding a small "disagreement" badge to each snapshot card when model-to-model spread is large.
+
+---
+
+## 2026-05-03 — TimesFM: discovered + fixed silent weight-load failure (prod was running random weights)
+
+**Context:** investigating why TimesFM forecasts have been so poor in production. Originally planned a LoRA fine-tuning effort on RunPod; while smoke-testing the training setup, discovered that the HF transformers `TimesFm2_5ModelForPrediction` class silently fails to load most checkpoint weights. Production has been running ~95% randomly-initialised weights for weeks. The "TimesFM is bad at finance" premise was wrong — the model was effectively unloaded.
+
+### Root cause
+
+`transformers.TimesFm2_5ModelForPrediction.from_pretrained("google/timesfm-2.5-200m-pytorch")` has a layout mismatch:
+- HF wrapper expects Llama-style separate `q_proj` / `k_proj` / `v_proj` projections.
+- Google's actual checkpoint uses combined `qkv_proj` (original TimesFM layout).
+
+Result on load: every transformer-block parameter shows as MISSING (model side) or UNEXPECTED (checkpoint side). The model loads to 100% structurally but ~95% of its parameters are torch's default init, not the trained values. No exception is raised — just a warning that's easy to miss in production logs.
+
+### Fix: switch loader to the official `timesfm` package
+
+[backend/app/services/timesfm_provider.py](backend/app/services/timesfm_provider.py) rewritten to use `timesfm.TimesFM_2p5_200M_torch.from_pretrained()` from `google-research/timesfm@master`. Verified clean load on RunPod (RTX 4090): 231M params, no MISSING/UNEXPECTED.
+
+**Other improvements while I was in there:**
+- **Native quantile head:** TimesFM 2.5 outputs 10 quantile channels per horizon step. Replaced the previous Gaussian fan synthesis (`σ·√t`) with native quantile bands (p10 / p25 / p50 / p75 / p90 from the model itself). p5 / p95 still extrapolated via Gaussian z-ratio (× 1.283) from p10 / p90.
+- **Pre-compile at startup:** `model.compile(ForecastConfig(max_horizon=64))` runs once during `load_timesfm()`. Main forecast (h=63) and shadow forecast (h=30) share the compiled graph — no per-request recompile thrash. `MAX_HORIZON = 64` constant guards against future horizon increases.
+- **`normalize_inputs=True`:** model handles input scaling internally, so we still feed the raw equity curve. Linear conversion `(L̂_h − L_T) / L_T * 100` at the end keeps output bounded (no exp() blowup).
+- **Same external interface** — `main.py` and `forecast_engine.py` need no edits.
+
+### Diagnostic journey (for the record)
+
+The fix was found via a smoke-test in the fine-tuning prep that revealed the MISSING/UNEXPECTED report on weight load. Iterated through:
+1. HF transformers — broken (Llama-style layer mismatch).
+2. pip `timesfm` (PyPI release) — too old, no 2.5 class exposed.
+3. pip `timesfm` + 2.0 500M — older 2.0 architecture mismatch (checkpoint has 50 layers, decoder supports fewer).
+4. `pip install git+https://github.com/google-research/timesfm.git` — has `TimesFM_2p5_200M_torch`, loads cleanly. ✓
+
+[backend/scripts/inspect_timesfm.py](backend/scripts/inspect_timesfm.py) is the diagnostic script used in step 4 — kept for future reference. It probes load signature, finds the underlying `nn.Module`, dumps one transformer block, and identifies LoRA target modules.
+
+### Fine-tuning infrastructure (committed but shelved pending production validation)
+
+Before the silent-load discovery, planned a LoRA fine-tune on RunPod with the universe of S&P 500 + Russell 1000 + ETFs. Wrote:
+- [backend/scripts/build_finetune_universe.py](backend/scripts/build_finetune_universe.py) — downloads ~1,100 tickers (2000–2022), saves log-prices parquet
+- [backend/scripts/finetune_timesfm.py](backend/scripts/finetune_timesfm.py) — LoRA r=16 on attention layers, AdamW, validation gate (NB: targets old HF wrapper, would need rewrite to use official-package torch model with `forward(input_ts, masks)` signature if revisited)
+- [backend/requirements-train.txt](backend/requirements-train.txt) — added `peft>=0.13`, `accelerate>=0.30`, `transformers>=4.48`, `torch>=2.2` (training-only)
+- [TIMESFM_FINETUNING.md](TIMESFM_FINETUNING.md) — full plan (universe construction, log-price training rationale, log-vs-linear inference branching, RunPod setup walkthrough)
+
+These are committed but not actively used. The fine-tune effort is paused until we validate whether the production loader fix alone restores acceptable forecast quality. Likely outcome: it does, and the fine-tune doesn't ship. The scripts remain available if zero-shot quality with proper weights is still inadequate.
+
+**Files affected:**
+- `backend/app/services/timesfm_provider.py` — rewrite (HF loader → official timesfm package, native quantiles, pre-compile)
+- `backend/requirements.txt` — drop `transformers`, add `timesfm @ git+https://github.com/google-research/timesfm.git`
+- `backend/requirements-train.txt` — add LoRA training deps (training-only)
+- `backend/scripts/inspect_timesfm.py` — new diagnostic script
+- `backend/scripts/build_finetune_universe.py` — new training data builder
+- `backend/scripts/finetune_timesfm.py` — new LoRA training script
+- `TIMESFM_FINETUNING.md` — fine-tuning plan reference
+
+**Decisions:**
+- Switched production loader without an env-flag fallback — the HF path is broken, no point keeping it. If `timesfm` install fails on Railway, the model surfaces as `_model = "FAILED"` and TimesFM panel shows error (existing behaviour).
+- Kept `forecast_timesfm()` and `load_timesfm()` signatures identical so `forecast_engine.py` and `main.py` don't change.
+- Pre-compile at startup (vs lazy per-request) chosen because Railway requests come in parallel via thread pool, and lazy compile would race-thrash between h=63 and h=30 on every request (3-5s penalty each).
+- p50 from the dedicated `output_projection_point` head, not the median quantile channel — slight quality bump and natural symmetry with bands.
+- Sort quantile channels along the channel axis as defence-in-depth even though `fix_quantile_crossing=True` already enforces monotonicity model-side.
+
+**Current state:**
+- `backend/requirements.txt` ready for Railway deploy.
+- New code passes lint locally; no actual Windows runtime test (timesfm git install may have Linux-only deps; will validate on Railway).
+- Fine-tune scripts written and committed but unused.
+
+**Pending:**
+- [ ] Deploy to Railway, watch logs for `TimesFM: ready (231 M params, ~924 MB fp32) — load Xs + compile Ys` with no MISSING/UNEXPECTED warnings.
+- [ ] Visual check: TimesFM panel should show real fan bands and OOS R² that's not −111.
+- [ ] Decision point: if zero-shot quality is now good, archive `TIMESFM_FINETUNING.md` and the fine-tune scripts. If still inadequate, resume from the `inspect_timesfm.py` output (architecture is now well-understood — fine-tune script needs ~1 day of patch-aware training loop work to handle the official package's `forward(input_ts, masks)` signature).
